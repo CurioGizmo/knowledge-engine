@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "audit-engine": {
+      "command": "mcp-audit",
+      "args": []
+    }
+  }
+}

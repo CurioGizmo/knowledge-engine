@@ -1,0 +1,772 @@
+{
+ "audit:0": {
+  "found": [],
+  "missed": [
+   "aud-backend-0492"
+  ],
+  "query": "ui",
+  "recall": 0.0
+ },
+ "knowledge:1": {
+  "found": [
+   "database-sqlite-pragmas-canon",
+   "platform-mcp-mcp-core-mcp"
+  ],
+  "missed": [
+   "platform-antigravity-mcp-host-env"
+  ],
+  "query": "db",
+  "recall": 0.6666666666666666
+ },
+ "knowledge:2": {
+  "found": [
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "missed": [
+   "process-antigravity-worktree-branch-from-default-not-develop"
+  ],
+  "query": "pr",
+  "recall": 0.5
+ },
+ "knowledge:3": {
+  "found": [
+   "backend-pydantic-alias-direction-domain",
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "missed": [],
+  "query": "ci",
+  "recall": 1.0
+ },
+ "knowledge:5": {
+  "found": [],
+  "missed": [
+   "platform-mcp-mcp-core-mcp"
+  ],
+  "query": "0%",
+  "recall": 0.0
+ },
+ "knowledge:6": {
+  "found": [],
+  "missed": [
+   "backend-5-9-fp-connection",
+   "backend-query-side-rus-eng",
+   "docs-consistency-pattern-trigger",
+   "process-antigravity-worktree-branch-from-default-not-develop"
+  ],
+  "query": "id",
+  "recall": 0.0
+ },
+ "knowledge:8": {
+  "found": [],
+  "missed": [
+   "platform-e2-skills-type-all"
+  ],
+  "query": "ml",
+  "recall": 0.0
+ },
+ "audit:9": {
+  "found": [
+   "aud-backend-0492"
+  ],
+  "missed": [],
+  "query": "фастапи дб",
+  "recall": 1.0
+ },
+ "knowledge:11": {
+  "found": [],
+  "missed": [
+   "database-sqlite-pragmas-canon"
+  ],
+  "query": "бд",
+  "recall": 0.0
+ },
+ "audit:11": {
+  "found": [
+   "aud-backend-0492"
+  ],
+  "missed": [],
+  "query": "бд",
+  "recall": 1.0
+ },
+ "knowledge:12": {
+  "found": [],
+  "missed": [
+   "platform-e2-skills-type-all"
+  ],
+  "query": "qa",
+  "recall": 0.0
+ },
+ "audit:12": {
+  "found": [],
+  "missed": [
+   "aud-backend-1191",
+   "aud-skills-41d9"
+  ],
+  "query": "qa",
+  "recall": 0.0
+ },
+ "knowledge:13": {
+  "found": [
+   "agents-subagent-review-of-uncommitted"
+  ],
+  "missed": [
+   "backend-frontmatter-split-regex-sub",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "результатами",
+  "recall": 0.3333333333333333
+ },
+ "knowledge:14": {
+  "found": [
+   "agents-subagent-review-of-uncommitted"
+  ],
+  "missed": [
+   "backend-frontmatter-split-regex-sub",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "результат",
+  "recall": 0.3333333333333333
+ },
+ "knowledge:15": {
+  "found": [
+   "agents-subagent-review-of-uncommitted"
+  ],
+  "missed": [
+   "backend-frontmatter-split-regex-sub",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "результаты",
+  "recall": 0.3333333333333333
+ },
+ "knowledge:16": {
+  "found": [],
+  "missed": [
+   "backend-frontmatter-split-regex-sub",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "результатами поиска",
+  "recall": 0.0
+ },
+ "knowledge:17": {
+  "found": [
+   "platform-flow-selection"
+  ],
+  "missed": [
+   "backend-fuzzy-dual-write-translit",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "кандидатами",
+  "recall": 0.3333333333333333
+ },
+ "knowledge:18": {
+  "found": [
+   "platform-flow-selection"
+  ],
+  "missed": [
+   "backend-fuzzy-dual-write-translit",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "кандидат",
+  "recall": 0.3333333333333333
+ },
+ "knowledge:19": {
+  "found": [
+   "platform-flow-selection"
+  ],
+  "missed": [
+   "backend-fuzzy-dual-write-translit",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "кандидаты",
+  "recall": 0.3333333333333333
+ },
+ "knowledge:22": {
+  "found": [],
+  "missed": [
+   "database-fts5-trigram"
+  ],
+  "query": "блокировками",
+  "recall": 0.0
+ },
+ "knowledge:23": {
+  "found": [],
+  "missed": [
+   "database-fts5-trigram"
+  ],
+  "query": "блокирующий",
+  "recall": 0.0
+ },
+ "knowledge:24": {
+  "found": [],
+  "missed": [
+   "database-fts5-trigram"
+  ],
+  "query": "соединениями",
+  "recall": 0.0
+ },
+ "knowledge:25": {
+  "found": [
+   "backend-5-9-fp-connection",
+   "backend-precision-10-1-00",
+   "backend-query-side-rus-eng",
+   "platform-flow-selection"
+  ],
+  "missed": [
+   "backend-fuzzy-dual-write-translit",
+   "database-fts5-trigram",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "запросами",
+  "recall": 0.5714285714285714
+ },
+ "knowledge:26": {
+  "found": [
+   "backend-5-9-fp-connection",
+   "backend-aliases-mcp-skills-bm25",
+   "backend-query-side-rus-eng",
+   "platform-flow-selection"
+  ],
+  "missed": [
+   "database-fts5-trigram",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "запросы",
+  "recall": 0.6666666666666666
+ },
+ "knowledge:27": {
+  "found": [],
+  "missed": [
+   "backend-fuzzy-dual-write-translit"
+  ],
+  "query": "опечатками",
+  "recall": 0.0
+ },
+ "knowledge:28": {
+  "found": [
+   "database-fts5-bm25-weights-no-binding",
+   "platform-flow-selection",
+   "platform-mcp-project-root-server",
+   "review-error-contract-layers-mcp"
+  ],
+  "missed": [],
+  "query": "ошибками",
+  "recall": 1.0
+ },
+ "knowledge:29": {
+  "found": [],
+  "missed": [
+   "backend-5-9-fp-connection",
+   "backend-fuzzy-dual-write-translit",
+   "backend-fwd-cap-40-scheduler",
+   "backend-query-side-rus-eng"
+  ],
+  "query": "транслитерации",
+  "recall": 0.0
+ },
+ "knowledge:30": {
+  "found": [],
+  "missed": [
+   "backend-5-9-fp-connection",
+   "backend-fuzzy-dual-write-translit",
+   "backend-fwd-cap-40-scheduler",
+   "backend-query-side-rus-eng"
+  ],
+  "query": "транслитерация",
+  "recall": 0.0
+ },
+ "knowledge:31": {
+  "found": [
+   "database-fts5-bm25-weights-no-binding"
+  ],
+  "missed": [
+   "database-fts5-external-content-content",
+   "database-fts5-trigram",
+   "database-sqlite-pragmas-canon"
+  ],
+  "query": "запросом к базе",
+  "recall": 0.25
+ },
+ "knowledge:32": {
+  "found": [],
+  "missed": [
+   "platform-e2-skills-type-all"
+  ],
+  "query": "сборками",
+  "recall": 0.0
+ },
+ "knowledge:33": {
+  "found": [
+   "backend-review-knowledge-mcp-self-review",
+   "review-knowledge-cards-not-task-tracker"
+  ],
+  "missed": [],
+  "query": "карточками",
+  "recall": 1.0
+ },
+ "knowledge:34": {
+  "found": [
+   "agents-subagent-review-of-uncommitted"
+  ],
+  "missed": [
+   "backend-frontmatter-split-regex-sub",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "результатом",
+  "recall": 0.3333333333333333
+ },
+ "knowledge:35": {
+  "found": [],
+  "missed": [
+   "database-fts5-trigram"
+  ],
+  "query": "стемминг",
+  "recall": 0.0
+ },
+ "knowledge:36": {
+  "found": [],
+  "missed": [
+   "database-fts5-trigram"
+  ],
+  "query": "стеммингом",
+  "recall": 0.0
+ },
+ "audit:37": {
+  "found": [
+   "aud-backend-479a",
+   "aud-backend-c77b"
+  ],
+  "missed": [],
+  "query": "заголовками",
+  "recall": 1.0
+ },
+ "knowledge:38": {
+  "found": [],
+  "missed": [
+   "platform-e2-skills-type-all"
+  ],
+  "query": "plan-execution-flow",
+  "recall": 0.0
+ },
+ "audit:38": {
+  "found": [
+   "aud-skills-5bc0"
+  ],
+  "missed": [],
+  "query": "plan-execution-flow",
+  "recall": 1.0
+ },
+ "audit:39": {
+  "found": [
+   "aud-backend-fe8e"
+  ],
+  "missed": [],
+  "query": "load_skill",
+  "recall": 1.0
+ },
+ "knowledge:40": {
+  "found": [
+   "platform-mcp-project-root-server",
+   "platform-root-failfast-guard"
+  ],
+  "missed": [],
+  "query": "MCP_PROJECT_ROOT",
+  "recall": 1.0
+ },
+ "knowledge:41": {
+  "found": [
+   "backend-pydantic-alias-direction-domain"
+  ],
+  "missed": [],
+  "query": "check_known_debt",
+  "recall": 1.0
+ },
+ "knowledge:42": {
+  "found": [],
+  "missed": [
+   "platform-mcp-sdk-calltoolresult-is"
+  ],
+  "query": "CallToolResult.is_error",
+  "recall": 0.0
+ },
+ "knowledge:44": {
+  "found": [],
+  "missed": [
+   "platform-mcp-mcp-core-mcp"
+  ],
+  "query": "0% покрытие",
+  "recall": 0.0
+ },
+ "audit:45": {
+  "found": [
+   "aud-backend-0492",
+   "aud-backend-106a"
+  ],
+  "missed": [],
+  "query": "sanitize_fts_query",
+  "recall": 1.0
+ },
+ "knowledge:46": {
+  "found": [
+   "platform-root-failfast-guard"
+  ],
+  "missed": [],
+  "query": "ROOT_NOT_ANCHORED",
+  "recall": 1.0
+ },
+ "knowledge:47": {
+  "found": [
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "missed": [],
+  "query": "record_knowledge",
+  "recall": 1.0
+ },
+ "audit:47": {
+  "found": [],
+  "missed": [
+   "aud-backend-c77b"
+  ],
+  "query": "record_knowledge",
+  "recall": 0.0
+ },
+ "knowledge:48": {
+  "found": [],
+  "missed": [
+   "database-fts5-external-content-content"
+  ],
+  "query": "external-content",
+  "recall": 0.0
+ },
+ "knowledge:49": {
+  "found": [
+   "database-fts5-bm25-weights-no-binding"
+  ],
+  "missed": [
+   "database-fts5-trigram"
+  ],
+  "query": "FTS5 bm25",
+  "recall": 0.5
+ },
+ "audit:49": {
+  "found": [
+   "aud-database-41e9"
+  ],
+  "missed": [],
+  "query": "FTS5 bm25",
+  "recall": 1.0
+ },
+ "knowledge:50": {
+  "found": [
+   "backend-aliases-mcp-skills-bm25"
+  ],
+  "missed": [
+   "platform-fastmcp-literal-pydantic"
+  ],
+  "query": "pydantic-v2",
+  "recall": 0.5
+ },
+ "knowledge:51": {
+  "found": [],
+  "missed": [
+   "database-fts5-external-content-content"
+  ],
+  "query": "SQL logic error",
+  "recall": 0.0
+ },
+ "knowledge:53": {
+  "found": [
+   "database-fts5-bm25-weights-no-binding",
+   "database-sqlite-pragmas-canon"
+  ],
+  "missed": [
+   "database-fts5-external-content-content",
+   "database-fts5-trigram"
+  ],
+  "query": "qlite",
+  "recall": 0.5
+ },
+ "knowledge:54": {
+  "found": [
+   "database-fts5-bm25-weights-no-binding",
+   "database-sqlite-pragmas-canon"
+  ],
+  "missed": [
+   "backend-fastapi-def-sqlite3-lifespan",
+   "database-fts5-external-content-content",
+   "database-fts5-trigram",
+   "database-python-sqlite3-split-ddl"
+  ],
+  "query": "sqlit",
+  "recall": 0.3333333333333333
+ },
+ "knowledge:55": {
+  "found": [],
+  "missed": [
+   "backend-fuzzy-dual-write-translit"
+  ],
+  "query": "отлдка",
+  "recall": 0.0
+ },
+ "knowledge:56": {
+  "found": [],
+  "missed": [
+   "backend-fuzzy-dual-write-translit"
+  ],
+  "query": "скллайт",
+  "recall": 0.0
+ },
+ "knowledge:57": {
+  "found": [],
+  "missed": [
+   "database-fts5-trigram"
+  ],
+  "query": "стеминг",
+  "recall": 0.0
+ },
+ "knowledge:58": {
+  "found": [],
+  "missed": [
+   "platform-e2-5-intent-aware"
+  ],
+  "query": "санитайзерр",
+  "recall": 0.0
+ },
+ "audit:58": {
+  "found": [],
+  "missed": [
+   "aud-backend-0492",
+   "aud-backend-106a"
+  ],
+  "query": "санитайзерр",
+  "recall": 0.0
+ },
+ "knowledge:62": {
+  "found": [],
+  "missed": [
+   "backend-fuzzy-dual-write-translit",
+   "platform-e2-skills-type-all",
+   "platform-flow-selection"
+  ],
+  "query": "кандидатками",
+  "recall": 0.0
+ },
+ "knowledge:64": {
+  "found": [],
+  "missed": [
+   "backend-fastapi-def-sqlite3-lifespan"
+  ],
+  "query": "фастапи",
+  "recall": 0.0
+ },
+ "audit:64": {
+  "found": [
+   "aud-backend-0492"
+  ],
+  "missed": [],
+  "query": "фастапи",
+  "recall": 1.0
+ },
+ "knowledge:65": {
+  "found": [],
+  "missed": [
+   "database-fts5-external-content-content",
+   "database-python-sqlite3-split-ddl"
+  ],
+  "query": "схемма",
+  "recall": 0.0
+ },
+ "knowledge:66": {
+  "found": [],
+  "missed": [
+   "platform-git-stash-pop"
+  ],
+  "query": "fsck",
+  "recall": 0.0
+ },
+ "knowledge:67": {
+  "found": [],
+  "missed": [
+   "platform-git-stash-pop"
+  ],
+  "query": "mtimes",
+  "recall": 0.0
+ },
+ "knowledge:68": {
+  "found": [
+   "platform-call-mcp-tool-antigravity"
+  ],
+  "missed": [],
+  "query": "Python/TS/Go",
+  "recall": 1.0
+ },
+ "knowledge:69": {
+  "found": [],
+  "missed": [
+   "backend-fuzzy-dual-write-translit"
+  ],
+  "query": "Non-Goal",
+  "recall": 0.0
+ },
+ "knowledge:70": {
+  "found": [
+   "backend-installer-test-home-isolation"
+  ],
+  "missed": [
+   "platform-antigravity-mcp-host-env"
+  ],
+  "query": "cmdline",
+  "recall": 0.5
+ },
+ "knowledge:71": {
+  "found": [],
+  "missed": [
+   "platform-git-stash-pop",
+   "platform-harness-stability-fixes-diff"
+  ],
+  "query": "17b79f9",
+  "recall": 0.0
+ },
+ "knowledge:72": {
+  "found": [
+   "security-slotcompiler-resolve-slot-content"
+  ],
+  "missed": [],
+  "query": "песочнице",
+  "recall": 1.0
+ },
+ "knowledge:73": {
+  "found": [],
+  "missed": [
+   "database-fts5-external-content-content"
+  ],
+  "query": "drop_artifact_path",
+  "recall": 0.0
+ },
+ "knowledge:74": {
+  "found": [
+   "platform-call-mcp-tool-antigravity"
+  ],
+  "missed": [],
+  "query": "PROMOTED 2026-10-16",
+  "recall": 1.0
+ },
+ "knowledge:75": {
+  "found": [],
+  "missed": [
+   "platform-e2-skills-type-all"
+  ],
+  "query": "почему падает тест",
+  "recall": 0.0
+ },
+ "audit:75": {
+  "found": [
+   "aud-backend-a4db"
+  ],
+  "missed": [],
+  "query": "почему падает тест",
+  "recall": 1.0
+ },
+ "knowledge:76": {
+  "found": [
+   "database-sqlite-pragmas-canon"
+  ],
+  "missed": [
+   "backend-fastapi-def-sqlite3-lifespan",
+   "database-fts5-trigram"
+  ],
+  "query": "SQLite блокировки",
+  "recall": 0.3333333333333333
+ },
+ "knowledge:79": {
+  "found": [],
+  "missed": [
+   "backend-fuzzy-dual-write-translit",
+   "database-fts5-trigram",
+   "platform-e2-skills-type-all"
+  ],
+  "query": "fuzzy jaccard стемминг",
+  "recall": 0.0
+ },
+ "knowledge:80": {
+  "found": [],
+  "missed": [
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "query": "антиспам гейт",
+  "recall": 0.0
+ },
+ "knowledge:81": {
+  "found": [
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "missed": [],
+  "query": "саморевью перед коммитом",
+  "recall": 1.0
+ },
+ "knowledge:82": {
+  "found": [
+   "backend-installer-test-home-isolation",
+   "platform-mcp-project-root-server",
+   "platform-root-failfast-guard"
+  ],
+  "missed": [],
+  "query": "где карточки хранятся",
+  "recall": 1.0
+ },
+ "audit:84": {
+  "found": [
+   "aud-database-41e9"
+  ],
+  "missed": [],
+  "query": "bm25 отрицательный idf",
+  "recall": 1.0
+ },
+ "audit:85": {
+  "found": [
+   "aud-database-41e9"
+  ],
+  "missed": [],
+  "query": "BM25 score 0",
+  "recall": 1.0
+ },
+ "audit:86": {
+  "found": [
+   "aud-backend-0492"
+  ],
+  "missed": [],
+  "query": "короткие термины не находятся",
+  "recall": 1.0
+ },
+ "knowledge:87": {
+  "found": [],
+  "missed": [
+   "platform-e2-skills-type-all"
+  ],
+  "query": "план реализации фичи",
+  "recall": 0.0
+ },
+ "knowledge:88": {
+  "found": [],
+  "missed": [
+   "platform-e2-skills-type-all"
+  ],
+  "query": "сколько скиллов в каталоге",
+  "recall": 0.0
+ },
+ "audit:88": {
+  "found": [],
+  "missed": [
+   "aud-skills-5bc0"
+  ],
+  "query": "сколько скиллов в каталоге",
+  "recall": 0.0
+ },
+ "audit:89": {
+  "found": [
+   "aud-backend-479a"
+  ],
+  "missed": [],
+  "query": "revью план",
+  "recall": 1.0
+ }
+}

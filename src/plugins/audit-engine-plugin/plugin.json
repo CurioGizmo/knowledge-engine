@@ -1,0 +1,16 @@
+{
+  "name": "audit-engine-plugin",
+  "version": "0.5.0",
+  "description": "Technical debt tracking, DAG-based backlog management, and regression prevention",
+  "author": {
+    "name": "CurioGizmo"
+  },
+  "keywords": [
+    "audit",
+    "technical-debt",
+    "backlog",
+    "dag",
+    "code-review",
+    "mcp"
+  ]
+}

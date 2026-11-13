@@ -1,0 +1,1471 @@
+[
+ {
+  "group": "short-terms",
+  "query": "ui",
+  "relevant_ids": [
+   "aud-backend-0492"
+  ],
+  "notes": "2-символьный акроним 'ui'. В knowledge/ карточек со словом 'UI' нет (grep 0) — единственный реальный якорь: audit-карточка про SHORT_ACRONYMS. Ожидание после фикса R6: точный канал не отбрасывает 'ui' (сейчас len<3 фильтр). Воспроизведение из review: карточка с текстом 'UI db pipeline' не находится по ui/db.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [],
+   "audit": [
+    "aud-backend-0492"
+   ]
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "db",
+  "relevant_ids": [
+   "database-sqlite-pragmas-canon",
+   "platform-mcp-mcp-core-mcp",
+   "platform-antigravity-mcp-host-env"
+  ],
+  "notes": "'db' реально встречается в 3 knowledge-карточках (db.py, skills_fts.db, knowledge.db). Точный канал: 2-символьный термин должен находиться.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-sqlite-pragmas-canon",
+    "platform-mcp-mcp-core-mcp",
+    "platform-antigravity-mcp-host-env"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "pr",
+  "relevant_ids": [
+   "process-antigravity-worktree-branch-from-default-not-develop",
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "notes": "'PR' встречается (push/PR, PR-ревью). 2 символа, латиница.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "process-antigravity-worktree-branch-from-default-not-develop",
+    "backend-review-knowledge-mcp-self-review"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "ci",
+  "relevant_ids": [
+   "backend-pydantic-alias-direction-domain",
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "notes": "'CI' (pre-commit/CI-хуки) встречается в 2 карточках.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-pydantic-alias-direction-domain",
+    "backend-review-knowledge-mcp-self-review"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "cd",
+  "relevant_ids": [],
+  "notes": "НЕТ реальных карточек с 'cd' в knowledge/ (grep 0 попаданий, cd как 'continuous delivery'). Негативный кейс точного канала: пустая выдача БЕЗ мусора из substring-матчей (сейчас LIKE-подход даёт FP).",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "0%",
+  "relevant_ids": [
+   "platform-mcp-mcp-core-mcp"
+  ],
+  "notes": "Карточка platform-mcp-mcp-core-mcp содержит '100%'. Запрос '0%' проверяет, что процент-термин не убивает санитайзер (кавычки вокруг '0%') и что FTS его находит.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-mcp-mcp-core-mcp"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "id",
+  "relevant_ids": [
+   "docs-consistency-pattern-trigger",
+   "backend-5-9-fp-connection",
+   "backend-query-side-rus-eng",
+   "process-antigravity-worktree-branch-from-default-not-develop"
+  ],
+  "notes": "'id' встречается (task_id, artifact_id). Ожидание: токен 'id' матчит карточки, где есть словоформы 'id' (не только за счёт prefix id* в idea/identity — важно для порога FP).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "docs-consistency-pattern-trigger",
+    "backend-5-9-fp-connection",
+    "backend-query-side-rus-eng",
+    "process-antigravity-worktree-branch-from-default-not-develop"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "os",
+  "relevant_ids": [],
+  "notes": "НЕТ карточек с 'OS' в knowledge/ (grep 0). Негативный кейс: пустая выдача без FP.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "ml",
+  "relevant_ids": [
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "'ml' встречается в platform-e2-skills-type-all (ml-utilites). 2-символьный акроним + синоним к имени скилла.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "фастапи дб",
+  "relevant_ids": [
+   "aud-backend-0492"
+  ],
+  "notes": "Симуляция S1 из audit-карточки: «фастапи дб» → count=0, «дб» выкинут фильтром длины (нет в SHORT_ACRONYMS). Русский 2-символьный акроним.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [],
+   "audit": [
+    "aud-backend-0492"
+   ]
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "ui db pipeline",
+  "relevant_ids": [],
+  "notes": "Воспроизведение R6 из post-implementation-review: карточка 'UI db pipeline' → ui=0, db=0, pipeline=1. В knowledge/ НЕТ карточки с 'pipeline' (grep 0) — синтетический кейс, воспроизводится посевом карточки-кандидата. candidate_card: {'id': 'synthetic-ui-pipeline', 'title': 'UI db pipeline сборка', 'text': 'Сборка UI db pipeline...'}. Заполняется исполнителем R6 в тестовом стенде.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "бд",
+  "relevant_ids": [
+   "aud-backend-0492",
+   "database-sqlite-pragmas-canon"
+  ],
+  "notes": "«бд» в SHORT_ACRONYMS есть. Проверить, что русские 2-символьные токены работают (бд → database-карточки по смыслу; точный якорь — aud-backend-0492, где «дб»/«бд» разобраны).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-sqlite-pragmas-canon"
+   ],
+   "audit": [
+    "aud-backend-0492"
+   ]
+  }
+ },
+ {
+  "group": "short-terms",
+  "query": "qa",
+  "relevant_ids": [
+   "aud-skills-41d9",
+   "aud-backend-1191",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "2-символьный акроним 'qa': audit-карточки про QA-gates; knowledge platform-e2-skills-type-all упоминает QA.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-skills-type-all"
+   ],
+   "audit": [
+    "aud-skills-41d9",
+    "aud-backend-1191"
+   ]
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "результатами",
+  "relevant_ids": [
+   "backend-frontmatter-split-regex-sub",
+   "agents-subagent-review-of-uncommitted",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "ВОСПРОИЗВЕДЕНИЕ R6: словоформа результатами обязана матчить карточки со словом «результат» (3 карточки: «результат пуст», «противоречивый результат», «промежуточные результаты»). Стемминг: результатами→результат* (сейчас баг: результ*).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-frontmatter-split-regex-sub",
+    "agents-subagent-review-of-uncommitted",
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "результат",
+  "relevant_ids": [
+   "backend-frontmatter-split-regex-sub",
+   "agents-subagent-review-of-uncommitted",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "Базовая форма. Парный кейс: 'результатами' обязан давать ту же выдачу (общий стем 'результат').",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-frontmatter-split-regex-sub",
+    "agents-subagent-review-of-uncommitted",
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "результаты",
+  "relevant_ids": [
+   "platform-e2-skills-type-all",
+   "agents-subagent-review-of-uncommitted",
+   "backend-frontmatter-split-regex-sub"
+  ],
+  "notes": "Мн.ч. «результаты» — третья форма гнезда: стем обязан быть «результат» (не «результ»), карточка про ревью результатов должна находиться.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-skills-type-all",
+    "agents-subagent-review-of-uncommitted",
+    "backend-frontmatter-split-regex-sub"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "результатами поиска",
+  "relevant_ids": [
+   "platform-e2-skills-type-all",
+   "backend-frontmatter-split-regex-sub"
+  ],
+  "notes": "Словосочетание: творительный падеж + родительный падеж. Стеммы обоих слов должны срабатывать.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-skills-type-all",
+    "backend-frontmatter-split-regex-sub"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "кандидатами",
+  "relevant_ids": [
+   "backend-fuzzy-dual-write-translit",
+   "platform-flow-selection",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "ВОСПРОИЗВЕДЕНИЕ R6: кандидатами→кандидат* (сейчас баг: кандид*). Карточки со словом «кандидат»: fuzzy (MATCH-кандидаты), flow-selection (кандидатов), e2 (fuzzy-кандидат).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fuzzy-dual-write-translit",
+    "platform-flow-selection",
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "кандидат",
+  "relevant_ids": [
+   "backend-fuzzy-dual-write-translit",
+   "platform-flow-selection",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "База. Пара к предыдущему.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fuzzy-dual-write-translit",
+    "platform-flow-selection",
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "кандидаты",
+  "relevant_ids": [
+   "platform-flow-selection",
+   "platform-e2-skills-type-all",
+   "backend-fuzzy-dual-write-translit"
+  ],
+  "notes": "Им. мн. — та же склейка через стем 'кандидат'.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-flow-selection",
+    "platform-e2-skills-type-all",
+    "backend-fuzzy-dual-write-translit"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "сертификатами",
+  "relevant_ids": [],
+  "notes": "ВОСПРОИЗВЕДЕНИЕ R6: сертификатами→сертификат* (сейчас баг: сертифик*). В knowledge/ НЕТ карточек со словом «сертификат» (grep 0). Из воспроизведения R6 (closed debt 'Ошибка обработки сертификата при неверной подписи' в audit-стенде). candidate_card: {'id': 'synthetic-ssl-cert', 'title': 'SSL-сертификаты: истечение срока в проде', 'symptom': 'Ошибка обработки сертификата при неверной подписи'} — для стендового посева.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "сертификат",
+  "relevant_ids": [],
+  "notes": "НЕТ карточек knowledge/ с 'сертификат'. Кейс проверяется на синтетическом стенде (audit) или через fuzzy по translit 'сертификат'/'certificate'.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "блокировками",
+  "relevant_ids": [
+   "database-fts5-trigram"
+  ],
+  "notes": "Из карточки database-fts5-trigram: MATCH 'блокировками' → 0 хитов по документу с «блокирующий». Форма должна находиться (или явно покрываться fuzzy).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-trigram"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "блокирующий",
+  "relevant_ids": [
+   "database-fts5-trigram"
+  ],
+  "notes": "Форма, реально присутствующая в карточке. Пара к предыдущему: обе формы должны давать перекрывающуюся выдачу.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-trigram"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "соединениями",
+  "relevant_ids": [
+   "database-fts5-trigram"
+  ],
+  "notes": "Из карточки: J(соединениями,соединение)=0.636. Словоформа должна матчить «соединение» в той же карточке.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-trigram"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "запросами",
+  "relevant_ids": [
+   "backend-5-9-fp-connection",
+   "backend-query-side-rus-eng",
+   "backend-fuzzy-dual-write-translit",
+   "backend-precision-10-1-00",
+   "database-fts5-trigram",
+   "platform-flow-selection",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "Творительный мн.: запросами→запрос*. Карточек со словом «запрос» — 10+; стемминг обязан склеивать.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-5-9-fp-connection",
+    "backend-query-side-rus-eng",
+    "backend-fuzzy-dual-write-translit",
+    "backend-precision-10-1-00",
+    "database-fts5-trigram",
+    "platform-flow-selection",
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "запросы",
+  "relevant_ids": [
+   "backend-5-9-fp-connection",
+   "backend-query-side-rus-eng",
+   "backend-aliases-mcp-skills-bm25",
+   "database-fts5-trigram",
+   "platform-flow-selection",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "Им. мн.: стем 'запрос' — та же склейка.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-5-9-fp-connection",
+    "backend-query-side-rus-eng",
+    "backend-aliases-mcp-skills-bm25",
+    "database-fts5-trigram",
+    "platform-flow-selection",
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "опечатками",
+  "relevant_ids": [
+   "backend-fuzzy-dual-write-translit"
+  ],
+  "notes": "Словоформа опечатками → опечатк*. Карточка fuzzy содержит «опечатка».",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fuzzy-dual-write-translit"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "ошибками",
+  "relevant_ids": [
+   "review-error-contract-layers-mcp",
+   "database-fts5-bm25-weights-no-binding",
+   "platform-flow-selection",
+   "platform-mcp-project-root-server"
+  ],
+  "notes": "ошибками → ошибк* (к-основа; срез 'ами'+'ой' допустим, 'оши' — нет).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "review-error-contract-layers-mcp",
+    "database-fts5-bm25-weights-no-binding",
+    "platform-flow-selection",
+    "platform-mcp-project-root-server"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "транслитерации",
+  "relevant_ids": [
+   "backend-fuzzy-dual-write-translit",
+   "backend-fwd-cap-40-scheduler",
+   "backend-5-9-fp-connection",
+   "backend-query-side-rus-eng"
+  ],
+  "notes": "Род. падеж: транслитерации → транслитер*. Карточки со словом «транслитерация» (translit-кластер). НЕ должна склеиваться с 'транслит' (слэнг — через aliases).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fuzzy-dual-write-translit",
+    "backend-fwd-cap-40-scheduler",
+    "backend-5-9-fp-connection",
+    "backend-query-side-rus-eng"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "транслитерация",
+  "relevant_ids": [
+   "backend-fuzzy-dual-write-translit",
+   "backend-fwd-cap-40-scheduler",
+   "backend-5-9-fp-connection",
+   "backend-query-side-rus-eng"
+  ],
+  "notes": "Базовая форма транслит-кластера.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fuzzy-dual-write-translit",
+    "backend-fwd-cap-40-scheduler",
+    "backend-5-9-fp-connection",
+    "backend-query-side-rus-eng"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "запросом к базе",
+  "relevant_ids": [
+   "database-sqlite-pragmas-canon",
+   "database-fts5-bm25-weights-no-binding",
+   "database-fts5-trigram",
+   "database-fts5-external-content-content"
+  ],
+  "notes": "Форма запросом + контекст базы: карточки database-категории.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-sqlite-pragmas-canon",
+    "database-fts5-bm25-weights-no-binding",
+    "database-fts5-trigram",
+    "database-fts5-external-content-content"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "сборками",
+  "relevant_ids": [
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "сборками → сборк* (к-основа). Карточка содержит «сборка» (198 assemblies / сборки каталога).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "карточками",
+  "relevant_ids": [
+   "review-knowledge-cards-not-task-tracker",
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "notes": "карточками → карточк* (к-основа; «карт» — чрезмерное усечение). Карточки со словом «карточк».",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "review-knowledge-cards-not-task-tracker",
+    "backend-review-knowledge-mcp-self-review"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "результатом",
+  "relevant_ids": [
+   "backend-frontmatter-split-regex-sub",
+   "agents-subagent-review-of-uncommitted",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "Творительный ед.: тот же стем 'результат'.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-frontmatter-split-regex-sub",
+    "agents-subagent-review-of-uncommitted",
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "стемминг",
+  "relevant_ids": [
+   "database-fts5-trigram"
+  ],
+  "notes": "Базовая форма: «стемминг» встречается в database-fts5-trigram. Долг Найти: точное слово в карточке.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-trigram"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "стеммингом",
+  "relevant_ids": [
+   "database-fts5-trigram"
+  ],
+  "notes": "Творительный: стеммингом → стемминг*. Проверка, что форма не режется до 'стемм'/'стем'.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-trigram"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "russian-forms",
+  "query": "заголовками",
+  "relevant_ids": [
+   "aud-backend-c77b",
+   "aud-backend-479a"
+  ],
+  "notes": "заголовками → заголовк*. Русские секционные заголовки — известный класс дефекта (c77b).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [],
+   "audit": [
+    "aud-backend-c77b",
+    "aud-backend-479a"
+   ]
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "plan-execution-flow",
+  "relevant_ids": [
+   "aud-skills-5bc0",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "kebab-case идентификатор флоу. Дефисы не должны ломать MATCH (санитайзер оборачивает в кавычки — план требует проверить фактический MATCH, а не только вид кавычек).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-skills-type-all"
+   ],
+   "audit": [
+    "aud-skills-5bc0"
+   ]
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "load_skill",
+  "relevant_ids": [
+   "aud-backend-fe8e"
+  ],
+  "notes": "snake_case: имя инструмента в тексте audit-карточки (target_file: src/mcp_skills/server.py, symbol: load_skill).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [],
+   "audit": [
+    "aud-backend-fe8e"
+   ]
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "MCP_PROJECT_ROOT",
+  "relevant_ids": [
+   "platform-mcp-project-root-server",
+   "platform-root-failfast-guard"
+  ],
+  "notes": "UPPER_SNAKE идентификатор env-переменной из двух карточек. Подчёркивания + регистр.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-mcp-project-root-server",
+    "platform-root-failfast-guard"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "check_known_debt",
+  "relevant_ids": [
+   "backend-pydantic-alias-direction-domain"
+  ],
+  "notes": "snake_case имя инструмента: упоминается в карточке pydantic-alias (check_known_debt(domain=)). Прямой R6-контекст.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-pydantic-alias-direction-domain"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "CallToolResult.is_error",
+  "relevant_ids": [
+   "platform-mcp-sdk-calltoolresult-is"
+  ],
+  "notes": "Идентификатор с точкой: CallToolResult.is_error. Пунктуация в запросе.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-mcp-sdk-calltoolresult-is"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "-nostdin",
+  "relevant_ids": [],
+  "notes": "НЕТ карточек с '-nostdin' в knowledge/ (grep 0). Ведущий дефис — специфический кейс санитайзера (R6-упоминание '-nostdin'). candidate_card: {'id': 'synthetic-audio-nostdin', 'title': 'FFmpeg: аудио-сервер без -nostdin замирает (SIGTTIN)', 'symptom': 'FFmpeg в фоновом режиме получает SIGTTIN, если не передан -nostdin'}.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "0% покрытие",
+  "relevant_ids": [
+   "platform-mcp-mcp-core-mcp"
+  ],
+  "notes": "Карточка с текстом «100% обратной совместимостью» обязана находиться по запросу «0% покрытие» (проценты токенизируются как термины: '0%' и 'покрытие').",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-mcp-mcp-core-mcp"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "sanitize_fts_query",
+  "relevant_ids": [
+   "aud-backend-0492",
+   "aud-backend-106a"
+  ],
+  "notes": "snake_case имя функции: symbol в двух audit-карточках.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [],
+   "audit": [
+    "aud-backend-0492",
+    "aud-backend-106a"
+   ]
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "ROOT_NOT_ANCHORED",
+  "relevant_ids": [
+   "platform-root-failfast-guard"
+  ],
+  "notes": "UPPER_SNAKE код ошибки из карточки fail-fast guard.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-root-failfast-guard"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "record_knowledge",
+  "relevant_ids": [
+   "backend-review-knowledge-mcp-self-review",
+   "aud-backend-c77b"
+  ],
+  "notes": "snake_case имя инструмента в тексте карточек.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-review-knowledge-mcp-self-review"
+   ],
+   "audit": [
+    "aud-backend-c77b"
+   ]
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "external-content",
+  "relevant_ids": [
+   "database-fts5-external-content-content"
+  ],
+  "notes": "kebab-case термин из карточки (external-content tables).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-external-content-content"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "FTS5 bm25",
+  "relevant_ids": [
+   "database-fts5-bm25-weights-no-binding",
+   "aud-database-41e9",
+   "database-fts5-trigram"
+  ],
+  "notes": "Смешанный токен с цифрой + латинский термин. FTS5/bm25 встречаются в нескольких карточках.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-bm25-weights-no-binding",
+    "database-fts5-trigram"
+   ],
+   "audit": [
+    "aud-database-41e9"
+   ]
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "pydantic-v2",
+  "relevant_ids": [
+   "backend-aliases-mcp-skills-bm25",
+   "platform-fastmcp-literal-pydantic"
+  ],
+  "notes": "Термин с дефисом и цифрой. Карточки содержат 'Pydantic v2'.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-aliases-mcp-skills-bm25",
+    "platform-fastmcp-literal-pydantic"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "SQL logic error",
+  "relevant_ids": [
+   "database-fts5-external-content-content"
+  ],
+  "notes": "Английская фраза с пробелами: ошибка из карточки (sqlite3.OperationalError: SQL logic error).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-external-content-content"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "punctuation-hyphens",
+  "query": "why-do-i-get",
+  "relevant_ids": [
+   "database-fts5-external-content-content"
+  ],
+  "notes": "kebab-фраза (имитация пользовательского запроса в kebab-форме). Карточка содержит 'delete'/'update' path. Слабый кейс — проверка не-FP.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [
+    "database-fts5-external-content-content"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "qlite",
+  "relevant_ids": [
+   "database-sqlite-pragmas-canon",
+   "database-fts5-trigram",
+   "database-fts5-external-content-content",
+   "database-fts5-bm25-weights-no-binding"
+  ],
+  "notes": "Опечатка в начале слова (sqlit→qlite, пропущена первая буква): trigram-подстрочный поиск должен ловить (qlite ⊂ sqlite).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-sqlite-pragmas-canon",
+    "database-fts5-trigram",
+    "database-fts5-external-content-content",
+    "database-fts5-bm25-weights-no-binding"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "sqlit",
+  "relevant_ids": [
+   "database-sqlite-pragmas-canon",
+   "database-fts5-trigram",
+   "database-fts5-external-content-content",
+   "database-fts5-bm25-weights-no-binding",
+   "backend-fastapi-def-sqlite3-lifespan",
+   "database-python-sqlite3-split-ddl"
+  ],
+  "notes": "Опечатка в конце слова (sqlite→sqlit, потерян последний e): префиксный поиск word* ловит автоматически; fuzzy тоже.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-sqlite-pragmas-canon",
+    "database-fts5-trigram",
+    "database-fts5-external-content-content",
+    "database-fts5-bm25-weights-no-binding",
+    "backend-fastapi-def-sqlite3-lifespan",
+    "database-python-sqlite3-split-ddl"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "отлдка",
+  "relevant_ids": [
+   "backend-fuzzy-dual-write-translit"
+  ],
+  "notes": "Опечатка в середине (отладка→отлдка): фиксстура FUZZY_THRESHOLD (J=0.2857) из карточки fuzzy.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fuzzy-dual-write-translit"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "скллайт",
+  "relevant_ids": [
+   "backend-fuzzy-dual-write-translit"
+  ],
+  "notes": "Опечатка транслитерации (sqlite→скллайт): J('скллайт','склайте')=0.4286 — из карточки fuzzy.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fuzzy-dual-write-translit"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "стеминг",
+  "relevant_ids": [
+   "database-fts5-trigram"
+  ],
+  "notes": "Опечатка (стемминг→стеминг, одна м): fuzzy/trigram должен найти карточку со 'стемминг'.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-trigram"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "санитайзерр",
+  "relevant_ids": [
+   "aud-backend-0492",
+   "aud-backend-106a",
+   "platform-e2-5-intent-aware"
+  ],
+  "notes": "Опечатка в конце (санитайзер→санитайзерр): fuzzy. Карточки содержат 'санитайзер'.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-5-intent-aware"
+   ],
+   "audit": [
+    "aud-backend-0492",
+    "aud-backend-106a"
+   ]
+  }
+ },
+ {
+  "group": "typos",
+  "query": "sqlight",
+  "relevant_ids": [],
+  "notes": "Опечатка латиницей (sqlite→sqlight): fuzzy-канал. Реальных карточек с 'sqlight' нет; ожидание — database-карточки через fuzzy/trigram.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "деьт_record",
+  "relevant_ids": [],
+  "notes": "Перестановка (record_debt→debt_record): bag-of-words. Ожидание — aud-backend-1191/4044 через порядок слов.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "запос",
+  "relevant_ids": [],
+  "notes": "Опечатка в конце (запрос→запос): fuzzy. Карточки с 'запрос' — 10+.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "кандидатками",
+  "relevant_ids": [
+   "platform-flow-selection",
+   "backend-fuzzy-dual-write-translit",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "Опечаточная форма (кандидатами→кандидатками): fuzzy домен; стемминг не обязан, но fuzzy должен быть близок.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-flow-selection",
+    "backend-fuzzy-dual-write-translit",
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "прамг моды",
+  "relevant_ids": [],
+  "notes": "Опечатки: PRAGMA→прамг, mtime→моды. Слишком разрушительные опечатки — негативный кейс (не должен давать мусорную выдачу).",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "typos",
+  "query": "фастапи",
+  "relevant_ids": [
+   "aud-backend-0492",
+   "backend-fastapi-def-sqlite3-lifespan"
+  ],
+  "notes": "Транслит-форма (FastAPI→фастапи): из карточки 0492 (симуляция «фастапи дб»). Карточка backend-fastapi содержит 'FastAPI'.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fastapi-def-sqlite3-lifespan"
+   ],
+   "audit": [
+    "aud-backend-0492"
+   ]
+  }
+ },
+ {
+  "group": "typos",
+  "query": "схемма",
+  "relevant_ids": [
+   "database-python-sqlite3-split-ddl",
+   "database-fts5-external-content-content"
+  ],
+  "notes": "Опечатка (схема→схемма): fuzzy. Карточки содержат 'схема'/'DDL'.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-python-sqlite3-split-ddl",
+    "database-fts5-external-content-content"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "tail-match",
+  "query": "fsck",
+  "relevant_ids": [
+   "platform-git-stash-pop"
+  ],
+  "notes": "Термин встречается в конце карточки («даже после drop они живы в fsck» — решение, средняя-поздняя секция). Совпадение в хвосте длинного документа должно ранжироваться.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-git-stash-pop"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "tail-match",
+  "query": "mtimes",
+  "relevant_ids": [
+   "platform-git-stash-pop"
+  ],
+  "notes": "Термин в поздней секции карточки («перед откатом сверять mtimes и содержимое»).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-git-stash-pop"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "tail-match",
+  "query": "Python/TS/Go",
+  "relevant_ids": [
+   "platform-call-mcp-tool-antigravity"
+  ],
+  "notes": "Термин в середине-конце карточки («Кросс-рантаймовое воспроизведение (Python/TS/Go)» — обоснование).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-call-mcp-tool-antigravity"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "tail-match",
+  "query": "Non-Goal",
+  "relevant_ids": [
+   "backend-fuzzy-dual-write-translit"
+  ],
+  "notes": "Термин в поздней секции («подтверждённый Non-Goal языконезависимого движка» — решение).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fuzzy-dual-write-translit"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "tail-match",
+  "query": "cmdline",
+  "relevant_ids": [
+   "backend-installer-test-home-isolation",
+   "platform-antigravity-mcp-host-env"
+  ],
+  "notes": "Термин в поздних секциях обеих карточек (/proc/<pid>/cmdline).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-installer-test-home-isolation",
+    "platform-antigravity-mcp-host-env"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "tail-match",
+  "query": "17b79f9",
+  "relevant_ids": [
+   "platform-harness-stability-fixes-diff",
+   "platform-git-stash-pop"
+  ],
+  "notes": "Хэш коммита — поздняя секция карточек (diff поверх коммита 17b79f9). Точный идентификатор в хвосте.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-harness-stability-fixes-diff",
+    "platform-git-stash-pop"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "tail-match",
+  "query": "песочнице",
+  "relevant_ids": [
+   "security-slotcompiler-resolve-slot-content"
+  ],
+  "notes": "Слово в журнале (последняя секция карточки): «в沙箱» читать как «в песочнице». Хвост документа + экзотика.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "security-slotcompiler-resolve-slot-content"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "tail-match",
+  "query": "drop_artifact_path",
+  "relevant_ids": [
+   "database-fts5-external-content-content"
+  ],
+  "notes": "Функция в обосновании (поздняя секция): «Радиус поражения в проде: drop_artifact_path (audit storage.py:637)».",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-fts5-external-content-content"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "tail-match",
+  "query": "PROMOTED 2026-10-16",
+  "relevant_ids": [
+   "platform-call-mcp-tool-antigravity"
+  ],
+  "notes": "Точная строка журнала в конце карточки (запись PROMOTED от 2026-10-16). Проверка точного совпадения в хвосте документа.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-call-mcp-tool-antigravity"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "почему падает тест",
+  "relevant_ids": [
+   "platform-e2-skills-type-all",
+   "aud-backend-a4db"
+  ],
+  "notes": "Русско-английский разговорный запрос (из бенчмарка). ВАЖНО: слово «почему» НЕ должно матчить ВСЕ карточки (дефект c77b: русские секционные заголовки в body). Релевантны карточки про падение тестов.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-skills-type-all"
+   ],
+   "audit": [
+    "aud-backend-a4db"
+   ]
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "SQLite блокировки",
+  "relevant_ids": [
+   "database-sqlite-pragmas-canon",
+   "database-fts5-trigram",
+   "backend-fastapi-def-sqlite3-lifespan"
+  ],
+  "notes": "Латинский термин + русская форма (блокировки → блокировк*).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "database-sqlite-pragmas-canon",
+    "database-fts5-trigram",
+    "backend-fastapi-def-sqlite3-lifespan"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "сертификат подписи ошибка",
+  "relevant_ids": [],
+  "notes": "ВОСПРОИЗВЕДЕНИЕ R6 (check_known_debt): закрытый долг 'Ошибка обработки сертификата при неверной подписи' (api.py). Запрос про сертификат → found=True, is_known_debt (НЕ is_regression — долг planned/known). Стенд: synthetic audit-карточка.",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "Ошибка загрузки изображения из переполненного хранилища",
+  "relevant_ids": [],
+  "notes": "ВОСПРОИЗВЕДЕНИЕ R6 (check_known_debt): тот же файл api.py, ДРУГОЙ дефект. Ожидание: НЕ found/is_regression (сейчас ложно is_regression=True по одному общему слову «Ошибка»).",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "fuzzy jaccard стемминг",
+  "relevant_ids": [
+   "backend-fuzzy-dual-write-translit",
+   "database-fts5-trigram",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "Латинские термины + русское слово: карточки про fuzzy/stemming.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-fuzzy-dual-write-translit",
+    "database-fts5-trigram",
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "антиспам гейт",
+  "relevant_ids": [
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "notes": "Разговорная форма: Anti-Spam Gate. Карточка ADR саморевью (алиасы «саморевью карточек» и пр.).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-review-knowledge-mcp-self-review"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "саморевью перед коммитом",
+  "relevant_ids": [
+   "backend-review-knowledge-mcp-self-review"
+  ],
+  "notes": "Разговорная форма + предлог: карточка с алиасом «проверка качества карточек перед коммитом».",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "backend-review-knowledge-mcp-self-review"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "где карточки хранятся",
+  "relevant_ids": [
+   "platform-root-failfast-guard",
+   "platform-mcp-project-root-server",
+   "backend-installer-test-home-isolation"
+  ],
+  "notes": "Разговорный вопрос: где оседают карточки (все три карточки про потерю/привязку корня).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-root-failfast-guard",
+    "platform-mcp-project-root-server",
+    "backend-installer-test-home-isolation"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "стеммер режет слова",
+  "relevant_ids": [],
+  "notes": "Разговорная формулировка дефекта R6. НЕТ карточки, фиксирующей текущий баг стемминга. candidate_card: {'id': 'synthetic-stemmer-overcut', 'title': 'Стеммер чрезмерно режет: результатами→результ', 'symptom': 'Русский стемминг: вторичное снятие суффиксов у существительных на -ат/-ят'} — будет закрыт задачей R6 (карточка записывается исполнителем ПОСЛЕ фикса, не сейчас).",
+  "synthetic": true,
+  "expected": {
+   "knowledge": [],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "bm25 отрицательный idf",
+  "relevant_ids": [
+   "aud-database-41e9"
+  ],
+  "notes": "Латиница + русское слово: BM25 score=0.0 для частотных токенов (отрицательный idf клампается).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [],
+   "audit": [
+    "aud-database-41e9"
+   ]
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "BM25 score 0",
+  "relevant_ids": [
+   "aud-database-41e9"
+  ],
+  "notes": "Английская формулировка того же дефекта: score=0.0.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [],
+   "audit": [
+    "aud-database-41e9"
+   ]
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "короткие термины не находятся",
+  "relevant_ids": [
+   "aud-backend-0492"
+  ],
+  "notes": "Разговорная формулировка дефекта R6: короткие термины (ui, db, pr) не находятся. Ближайший якорь — карточка про SHORT_ACRONYMS.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [],
+   "audit": [
+    "aud-backend-0492"
+   ]
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "план реализации фичи",
+  "relevant_ids": [
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "Из карточки E2: search_skills(query='план реализации фичи', type='all') — проверка того, что запрос находит карточку с этим текстом (для skills-канала).",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-skills-type-all"
+   ],
+   "audit": []
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "сколько скиллов в каталоге",
+  "relevant_ids": [
+   "aud-skills-5bc0",
+   "platform-e2-skills-type-all"
+  ],
+  "notes": "Разговорный вопрос про каталог: карточки про 12 канонических флоу/25 скиллов.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [
+    "platform-e2-skills-type-all"
+   ],
+   "audit": [
+    "aud-skills-5bc0"
+   ]
+  }
+ },
+ {
+  "group": "mixed",
+  "query": "revью план",
+  "relevant_ids": [
+   "aud-backend-479a"
+  ],
+  "notes": "Из карточки 479a: 'ревью план' → 0, а 'Review' → 2. Русско-латинская смесь + известный дефект индексации.",
+  "synthetic": false,
+  "expected": {
+   "knowledge": [],
+   "audit": [
+    "aud-backend-479a"
+   ]
+  }
+ }
+]

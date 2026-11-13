@@ -1,0 +1,1169 @@
+[
+  {
+    "id": "01-lf-baseline",
+    "shell": "---\n{META}\n---\nbody text",
+    "note": "LF-базлайн",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "body text"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "body text"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "02-crlf-all",
+    "shell": "---\r\n{META}\r\n---\r\nbody",
+    "note": "CRLF целиком; parse совпадает через PyYAML",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "body"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "body"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "03-crlf-body-only",
+    "shell": "---\n{META}\n---\r\nbody",
+    "note": "CRLF только в теле",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "body"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "body"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "04a-body-no-trailing-nl",
+    "shell": "---\n{META}\n---\nbody text",
+    "note": "Тело без хвостового \\n — audit парсит корректно",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "body text"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "body text"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "04b-eof-on-closing-dash",
+    "shell": "---\n{META}\n---",
+    "note": "EOF на закрывающем ---: audit теряет мету, symptom загрязнён",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "kn-x",
+          "sections": []
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "name": "test-skill",
+          "body_head": ""
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-unknown",
+          "symptom_head": "---\nid: aud-x\ncategory: backend\npriority: important\n---"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidFlowFormatError",
+          "msg_prefix": "Флоу 'f' не содержит ни одного этапа (H2-заголовка)"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "InvalidFlowFormatError"
+        }
+      }
+    }
+  },
+  {
+    "id": "05-file-ends-with-dash",
+    "shell": "---\n{META}\n---\nbody\n---",
+    "note": "Файл кончается на --- (skills-хак '+\\n')",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "kn-x",
+          "sections": [
+            "_preamble"
+          ]
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "name": "test-skill",
+          "body_head": "body\n---"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-x",
+          "symptom_head": "body\n---"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "title": "Поток"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      }
+    }
+  },
+  {
+    "id": "06-hr-in-body",
+    "shell": "---\n{META}\n---\nbody\n\n---\n\nmore",
+    "note": "thematic break в теле",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "body\n\n---\n\nmore"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "body\n\n---\n\nmore"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "07-hr-first-body-line",
+    "shell": "---\n{META}\n---\n---\nbody",
+    "note": "hr первой строкой тела",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "---\nbody"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "---\nbody"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "08-empty-meta",
+    "shell": "---\n\n---\nbody",
+    "note": "Пустая мета: 4 разных поведения",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "ValueError",
+          "msg_prefix": "Frontmatter не является валидным YAML-словарём"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidSkillFormatError",
+          "msg_prefix": "Поле 'name' обязательно в frontmatter скилла"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-unknown",
+          "symptom_head": "body"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "title": "f"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      }
+    }
+  },
+  {
+    "id": "09-cyrillic",
+    "shell": "---\n{META}\nзаголовок: значение\n---\nтекст",
+    "note": "Кириллица в мете и теле",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "текст"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "текст"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "10-yaml-dates",
+    "shell": "---\n{META}\ncreated_at: 2026-01-02\n---\nbody",
+    "note": "YAML-даты",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "body"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "raise",
+        "type": "ValidationError",
+        "msg_prefix": "1 validation error for AuditIssue\ncreated_at\n  Input should "
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "11-bom-prefix",
+    "shell": "﻿---\n{META}\n---\nbody",
+    "note": "BOM перед ---: audit тихо в legacy",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "ValueError",
+          "msg_prefix": "Карточка должна начинаться с блока YAML frontmatter ('---')"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidSkillFormatError",
+          "msg_prefix": "Скилл должен содержать корректный YAML frontmatter между мар"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-unknown",
+          "symptom_head": "﻿---\nid: aud-x\ncategory: backend\npriority: important\n---\nbod"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "title": "f"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      }
+    }
+  },
+  {
+    "id": "12-dash-trailing-space",
+    "shell": "--- \n{META}\n ---\nbody",
+    "note": "--- с хвостовыми пробелами",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "raise",
+        "type": "ValueError",
+        "msg_prefix": "Некорректный блок frontmatter: отсутствует закрывающий разде"
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "raise",
+        "type": "InvalidSkillFormatError",
+        "msg_prefix": "Скилл должен содержать корректный YAML frontmatter между мар"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-unknown",
+        "symptom_head": "--- \nid: aud-x\ncategory: backend\npriority: important\n ---\nbo"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "f"
+      }
+    }
+  },
+  {
+    "id": "13-invalid-yaml",
+    "shell": "---\n{META}\nfoo: [unclosed\n---\nbody",
+    "note": "Невалидный YAML: knowledge — утечка ParserError, audit — молчание",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "ParserError",
+          "msg_prefix": "while parsing a flow sequence\n  in \"<unicode string>\", line "
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidSkillFormatError",
+          "msg_prefix": "Ошибка парсинга YAML frontmatter скилла: while parsing a flo"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-unknown",
+          "symptom_head": "body"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidFlowFormatError",
+          "msg_prefix": "Ошибка YAML frontmatter в флоу 'f': while parsing a flow seq"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      }
+    }
+  },
+  {
+    "id": "14-empty-file",
+    "shell": "",
+    "note": "Пустой файл",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "ValueError",
+          "msg_prefix": "Карточка должна начинаться с блока YAML frontmatter ('---')"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidSkillFormatError",
+          "msg_prefix": "Скилл должен содержать корректный YAML frontmatter между мар"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-unknown",
+          "symptom_head": ""
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidFlowFormatError",
+          "msg_prefix": "Файл сценария флоу 'f' пуст"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      }
+    }
+  },
+  {
+    "id": "15-only-dashes",
+    "shell": "---",
+    "note": "Только ---",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "ValueError",
+          "msg_prefix": "Некорректный блок frontmatter: отсутствует закрывающий разде"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidSkillFormatError",
+          "msg_prefix": "Скилл должен содержать корректный YAML frontmatter между мар"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-unknown",
+          "symptom_head": "---"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidFlowFormatError",
+          "msg_prefix": "Флоу 'f' не содержит ни одного этапа (H2-заголовка)"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      }
+    }
+  },
+  {
+    "id": "16a-block-scalar",
+    "shell": "---\n{META}\nsymptom: |\n  line1\n  ---\n  line3\n---\nbody",
+    "note": "Block scalar: отступ спасает, парсится корректно",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "body"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "line1\n---\nline3"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "16b-docsep-in-meta",
+    "shell": "---\n{META}\nextra: 1\n---\nlost: meta\n---\nbody",
+    "note": "Doc-separator на колонке 0 внутри меты: audit теряет хвост меты",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "kn-x",
+          "sections": [
+            "_preamble"
+          ]
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "name": "test-skill",
+          "body_head": "lost: meta\n---\nbody"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-x",
+          "symptom_head": "lost: meta\n---\nbody"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "title": "Поток"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      }
+    }
+  },
+  {
+    "id": "17-only-cr",
+    "shell": "---\r{META}\r---\rbody",
+    "note": "Only-CR: никто не матчится",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "ValueError",
+          "msg_prefix": "Некорректный блок frontmatter: отсутствует закрывающий разде"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidSkillFormatError",
+          "msg_prefix": "Скилл должен содержать корректный YAML frontmatter между мар"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-unknown",
+          "symptom_head": "---\rid: aud-x\ncategory: backend\npriority: important\r---\rbody"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidFlowFormatError",
+          "msg_prefix": "Флоу 'f' не содержит ни одного этапа (H2-заголовка)"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      }
+    }
+  },
+  {
+    "id": "18-dup-keys",
+    "shell": "---\n{META}\ntitle: первое\ntitle: второе\n---\nbody",
+    "note": "Дубли ключей: PyYAML last-wins (контракт зависимости)",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "body"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "body"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "второе"
+      }
+    }
+  },
+  {
+    "id": "19-multiline-meta",
+    "shell": "---\n{META}\ntags:\n  - a\n  - b\nsymptom: |\n  многострочный\n---\nbody",
+    "note": "Multiline/nested мета",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "kn-x",
+        "sections": [
+          "_preamble"
+        ]
+      },
+      "skills": {
+        "kind": "contract",
+        "result": "ok",
+        "name": "test-skill",
+        "body_head": "body"
+      },
+      "audit": {
+        "kind": "contract",
+        "result": "ok",
+        "id": "aud-x",
+        "symptom_head": "многострочный"
+      },
+      "flow": {
+        "kind": "contract",
+        "result": "ok",
+        "title": "Поток"
+      }
+    }
+  },
+  {
+    "id": "20-non-dict-yaml",
+    "shell": "---\nfoo bar\n---\nbody",
+    "note": "Non-dict валидный YAML: audit AttributeError-краш",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "ValueError",
+          "msg_prefix": "Frontmatter не является валидным YAML-словарём"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidSkillFormatError",
+          "msg_prefix": "YAML frontmatter скилла должен быть словарем"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "AttributeError",
+          "msg_prefix": "'str' object has no attribute 'get'"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidFlowFormatError",
+          "msg_prefix": "Frontmatter флоу 'f' должен быть YAML-словарем"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "domain-error"
+        }
+      }
+    }
+  },
+  {
+    "id": "21-crlf-value-dump",
+    "shell": "---\nsymptom: \"a\\rb\"\n---\nbody",
+    "note": "Значение с \\r: dump эскейпит навсегда",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "ValidationError",
+          "msg_prefix": "4 validation errors for CardFrontmatter\nid\n  Field required "
+        },
+        "v2_target": {
+          "result": "raise"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidSkillFormatError",
+          "msg_prefix": "Поле 'name' обязательно в frontmatter скилла"
+        },
+        "v2_target": {
+          "result": "raise"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-unknown",
+          "symptom_head": "a\rb"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "title": "f"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      }
+    }
+  },
+  {
+    "id": "22-crlf-eof",
+    "shell": "---\r\n{META}\r\n---\r",
+    "note": "CRLF+EOF: core не матчится, knowledge матчится",
+    "meta_variants": {
+      "knowledge": "id: kn-x\ncategory: backend\ntitle: Заголовок\ntype: lesson\nstatus: verified",
+      "audit": "id: aud-x\ncategory: backend\npriority: important",
+      "skills": "name: test-skill\ntitle: Тест\ndescription: Дескриптор",
+      "flow": "title: Поток\nintent: test"
+    },
+    "cells": {
+      "knowledge": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "kn-x",
+          "sections": []
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "skills": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "name": "test-skill",
+          "body_head": ""
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "audit": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "ok",
+          "id": "aud-unknown",
+          "symptom_head": "---\r\nid: aud-x\ncategory: backend\npriority: important\r\n---"
+        },
+        "v2_target": {
+          "result": "ok"
+        }
+      },
+      "flow": {
+        "kind": "snapshot-v1",
+        "v1": {
+          "result": "raise",
+          "type": "InvalidFlowFormatError",
+          "msg_prefix": "Флоу 'f' не содержит ни одного этапа (H2-заголовка)"
+        },
+        "v2_target": {
+          "result": "raise",
+          "type": "InvalidFlowFormatError"
+        }
+      }
+    }
+  }
+]

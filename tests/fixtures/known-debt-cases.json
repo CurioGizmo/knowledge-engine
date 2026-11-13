@@ -1,0 +1,218 @@
+[
+  {
+    "symptom": "record_review: подтверждение ревью приходит дважды при повторном вызове с тем же verdict",
+    "file_path": "src/mcp_audit/server.py",
+    "expected": "new",
+    "notes": "Пара к aud-backend-1191/4044/8040 (record_debt/record_review). Дефект другой: идемпотентность записи ревью, не спам-гейт и не валидация полей. Ожидание new — не должен матчиться по общему слову 'record'."
+  },
+  {
+    "symptom": "get_ready_backlog возвращает карточки со статусом completed в выдаче ready",
+    "file_path": "src/mcp_audit/server.py",
+    "expected": "new",
+    "notes": "Тот же файл server.py, третий независимый дефект (фильтрация статусов). Общие слова с существующими карточками: 'backlog'/'карточки'. Ожидание new."
+  },
+  {
+    "symptom": "flow_engine: advance с deliverable=None не возвращает required_deliverable блокер",
+    "file_path": "src/mcp_skills/flow_engine.py",
+    "expected": "new",
+    "notes": "Пара к aud-skills-41d9 (gate: null) и aud-backend-a4db (abort/SESSION_NOT_FOUND). Независимый дефект: обработка пустого deliverable. Ожидание new."
+  },
+  {
+    "symptom": "step_flow: retry с невалидным target 'github' молча переключает сессию без предупреждения",
+    "file_path": "src/mcp_skills/flow_engine.py",
+    "expected": "new",
+    "notes": "Четвёртый дефект того же файла: target-логика. Общее слово 'target' со старыми карточками — классический FP-кейс «одно общее слово». Ожидание new."
+  },
+  {
+    "symptom": "search_knowledge с limit=1 возвращает дубликат карточки из-за UNION в fuzzy-догоне",
+    "file_path": "src/mcp_knowledge/storage.py",
+    "expected": "new",
+    "notes": "Пара к aud-backend-d83a (draft скрыты). Дефект другой: дубликаты при малом limit. Ожидание new."
+  },
+  {
+    "symptom": "sanitize_fts_query: запрос с дефисом '-nostdin' возвращает 0 результатов из-за экранирования кавычками",
+    "file_path": "src/mcp_core/sanitizer.py",
+    "expected": "new",
+    "notes": "Пара к aud-backend-0492 (SHORT_ACRONYMS) и aud-backend-106a (транслит, done). Дефект другой: пунктуация/дефисы, не акронимы и не транслит. ВАЖНО: aud-backend-106a в статусе done — если check_known_debt вернёт is_regression по общему слову 'санитайзер', это и есть ложный is_regression R6. Ожидание: new (не regression!)."
+  },
+  {
+    "symptom": "стеммер режет 'результатами' до 'результ': русские формы не находятся",
+    "file_path": "src/mcp_core/sanitizer.py",
+    "expected": "new",
+    "notes": "Ещё один дефект sanitizer.py — чрезмерный стемминг (R6). Ожидание: new ПОКА не зафиксирован; после фикса R6 — карточка становится known. Сейчас: new (карточки нет)."
+  },
+  {
+    "symptom": "synchronizer не переиндексирует карточку после append_note (mtime не обновляется)",
+    "file_path": "src/mcp_knowledge/synchronizer.py",
+    "expected": "new",
+    "notes": "Пара к aud-backend-c77b (заголовки в body). Дефект другой: инкрементальная синхронизация. Общее слово 'индекс'. Ожидание new."
+  },
+  {
+    "symptom": "search_skills: is_ambiguous возвращает true при единственном флоу в выдаче",
+    "file_path": "src/mcp_skills/server.py",
+    "expected": "new",
+    "notes": "Пара к aud-backend-fe8e (stack как слоты) и aud-skills-5bc0 (alias-скоринг). Независимый дефект: логика is_ambiguous. Ожидание new."
+  },
+  {
+    "symptom": "search_artifacts: сортировка выдачи по rowid вместо даты создания артефакта",
+    "file_path": "src/mcp_audit/synchronizer.py",
+    "expected": "new",
+    "notes": "Пара к aud-backend-479a (русские заголовки/task_id). Дефект другой: сортировка. Ожидание new."
+  },
+  {
+    "symptom": "HypothesisResolution: поле resolution_note обрезается до 200 символов без предупреждения",
+    "file_path": "src/mcp_knowledge/models.py",
+    "expected": "new",
+    "notes": "Пара к aud-backend-5774 (confirm блокируется дублем). Дефект другой: ограничение длины. Ожидание new."
+  },
+  {
+    "symptom": "record_debt без Anti-Spam Gate: молчаливые дубли и непроверенные target_file/symbol принимают '../..'",
+    "file_path": "src/mcp_audit/server.py",
+    "expected": "known",
+    "notes": "Точный симптом карточки aud-backend-1191 (critical, planned). Ожидание: found=True, is_known_debt=True, is_regression=False."
+  },
+  {
+    "symptom": "record_debt принимает пустой title и невалидный priority — мусор в реестре",
+    "file_path": "src/mcp_audit/server.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-4044 (important, planned). Ожидание: known."
+  },
+  {
+    "symptom": "step_flow: abort без сессии возвращает FLOW_NOT_FOUND вместо SESSION_NOT_FOUND",
+    "file_path": "src/mcp_skills/flow_engine.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-a4db (planned). Ожидание: known."
+  },
+  {
+    "symptom": "Quality Gates недостижимы: у всех этапов 12 канонических флоу gate: null — сценарий gate_blocked мёртв",
+    "file_path": "src/mcp_skills/flow_engine.py",
+    "expected": "known",
+    "notes": "Карточка aud-skills-41d9 (planned). Ожидание: known."
+  },
+  {
+    "symptom": "Поиск по умолчанию скрывает draft-карточки: агент не находит только что записанное знание (count=0)",
+    "file_path": "src/mcp_knowledge/storage.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-d83a (critical, planned). Ожидание: known."
+  },
+  {
+    "symptom": "BM25 score=0.0 для частотных токенов (отрицательный idf клампается) — порядок выдачи произвольный",
+    "file_path": "src/mcp_core/db.py",
+    "expected": "known",
+    "notes": "Карточка aud-database-41e9 (planned). Ожидание: known."
+  },
+  {
+    "symptom": "load_skill: параметр stack трактуется как имена слотов, а не технологии — утечка сырых SLOT-маркеров",
+    "file_path": "src/mcp_skills/server.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-fe8e (planned). Ожидание: known."
+  },
+  {
+    "symptom": "FTS knowledge: русские секционные заголовки карточек индексируются в body — любой запрос с «почему/симптом/журнал» матчит ВСЕ карточки",
+    "file_path": "src/mcp_knowledge/synchronizer.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-c77b (critical, planned). Ожидание: known."
+  },
+  {
+    "symptom": "search_artifacts не индексирует русские структурные заголовки и task_id планов: 'ревью план' → 0, а 'Review' → 2",
+    "file_path": "src/mcp_audit/synchronizer.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-479a (planned). Ожидание: known."
+  },
+  {
+    "symptom": "resolve_hypotheses(action=confirm) блокируется дублем без обходного пути",
+    "file_path": "src/mcp_knowledge/models.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-5774 (critical, planned). Ожидание: known."
+  },
+  {
+    "symptom": "Сохранять activation и requires_stack при create_skill(overwrite=True)",
+    "file_path": "src/mcp_skills/creator.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-a0c8 (planned). Ожидание: known."
+  },
+  {
+    "symptom": "detect_project_stack не видит package.json в подкаталогах монорепо — react/nextjs/tailwind не детектятся",
+    "file_path": "src/mcp_skills/stack_detector.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-466c (planned). Ожидание: known."
+  },
+  {
+    "symptom": "Проекции ready_issues/search_debt отдают created_at/updated_at = null",
+    "file_path": "src/mcp_audit/storage.py",
+    "expected": "known",
+    "notes": "Карточка aud-backend-ce17 (planned). Ожидание: known."
+  },
+  {
+    "symptom": "Транслитерация и жаргон не решаются trigram-миграцией: нужен нормализационный слой — сленг снова не находится",
+    "file_path": "src/mcp_core/sanitizer.py",
+    "expected": "regression",
+    "notes": "Карточка aud-backend-106a в статусе done/. Повторение симптома после закрытия → is_regression=True. Единственная реальная completed-карточка в каталоге."
+  },
+  {
+    "symptom": "Закрытый долг «Ошибка обработки сертификата при неверной подписи» (api.py) снова обнаружен: сертификат отклоняется при валидной подписи",
+    "file_path": "src/audit/api.py",
+    "expected": "regression",
+    "notes": "Сценарий R6 из post-implementation-review: долг закрыт (completed), симптом возвращается → is_regression=True. Симптом из воспроизведения R6; file_path=api.py как в примере. СТЕНД: synthetic-карточка completed-статуса."
+  },
+  {
+    "symptom": "Молчаливая потеря карточек при записи в незаякоренный корень: пустой радар, записи ушли в /tmp/pytest-*",
+    "file_path": null,
+    "expected": "regression",
+    "notes": "Инцидент P0 2026-10-07 закрыт (platform-root-failfast-guard, ROOT_NOT_ANCHORED, commit в fixed). Повторная тихая потеря — регрессия. file_path=null: инцидент межмодульный (mcp_core/paths.py + серверы)."
+  },
+  {
+    "symptom": "Инсталлер-тест снова отравляет глобальный mcp_config.json без изоляции HOME",
+    "file_path": "src/mcp_core/installer.py",
+    "expected": "regression",
+    "notes": "P0-фикс commit 64e6f2c закрыт (backend-installer-test-home-isolation, active). Повторное отравление — регрессия."
+  },
+  {
+    "symptom": "Смешанные fence-маркеры ~~~ снова преждевременно закрывают код-блоки: секции плана обрезаются, FALSE DONE",
+    "file_path": "src/mcp_core/markdown.py",
+    "expected": "regression",
+    "notes": "Дефект закрыт (backend-fence-pattern-not-commonmark, verified: check_fence_line). Повторение — регрессия."
+  },
+  {
+    "symptom": "search_skills(query, type='all') снова не возвращает флоу в ответе",
+    "file_path": "src/mcp_skills/server.py",
+    "expected": "regression",
+    "notes": "Дефект E2 закрыт (platform-e2-skills-type-all VERIFIED: 'type=all с запросом возвращает flows'). Повторение — регрессия."
+  },
+  {
+    "symptom": "is_ambiguous снова срабатывает на флоу из одной intent-группы (top-2 из одного интента)",
+    "file_path": "src/mcp_skills/server.py",
+    "expected": "regression",
+    "notes": "Дефект E2-5 закрыт (platform-e2-5-intent-aware VERIFIED). Повторение — регрессия."
+  },
+  {
+    "symptom": "FRONTMATTER_SPLIT_REGEX .sub() снова съедает всё тело markdown-документа при обрезке дублирующего frontmatter",
+    "file_path": "src/mcp_core/markdown.py",
+    "expected": "regression",
+    "notes": "Дефект закрыт (backend-frontmatter-split-regex-sub: решение match+group(2), реализовано в creator.py). Повторение — регрессия."
+  },
+  {
+    "symptom": "check_known_debt снова возвращает is_regression=True по одному общему слову между разными дефектами одного файла",
+    "file_path": "src/mcp_audit/storage.py",
+    "expected": "regression",
+    "notes": "Мета-кейс: сам дефект R6 (ложный is_regression) после фикса задачи 9. Если он вернётся — регрессия фикса R6. Стенд: пары из Части A."
+  },
+  {
+    "symptom": "Планы task-1 и task-10 снова коллизируют: один файл перезаписывает другой",
+    "file_path": "src/mcp_audit/synchronizer.py",
+    "expected": "regression",
+    "notes": "Дефект R1 из плана (после фикса повтор — регрессия). Воспроизведение: save(task-10) → save(task-1) → один файл."
+  },
+  {
+    "symptom": "search_debt: фильтр priority не применяется при пустом category — выдача не сужается",
+    "file_path": "src/mcp_audit/storage.py",
+    "expected": "new",
+    "notes": "Пара к aud-backend-ce17 (проекции отдают null-даты) — тот же файл storage.py audit. Дефект другой: фильтрация. Ожидание: new (не должен матчиться по слову 'выдача'/'search')."
+  },
+  {
+    "symptom": "sanitize_fts_query отбрасывает процентный токен '0%' целиком вместе с цифрой",
+    "file_path": "src/mcp_core/sanitizer.py",
+    "expected": "new",
+    "notes": "Пара к aud-backend-0492/106a (sanitizer.py): дефект про пунктуацию-проценты. ВАЖНО: если check_known_debt вернёт is_regression по done-карточке aud-backend-106a (общее слово 'санитайзер'/'токен') — это воспроизведение ложного is_regression R6. Ожидание: new."
+  }
+]

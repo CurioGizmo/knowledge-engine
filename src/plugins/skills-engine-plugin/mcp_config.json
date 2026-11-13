@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "skills-engine": {
+      "command": "mcp-skills-engine",
+      "args": [],
+      "force_all_tools_eager": true,
+      "tools": {
+        "search_skills": {
+          "eager": true
+        },
+        "load_skill": {
+          "eager": true
+        },
+        "create_skill": {
+          "eager": true
+        },
+        "step_flow": {
+          "eager": true
+        }
+      }
+    }
+  }
+}

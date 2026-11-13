@@ -1,0 +1,123 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-knowledge-engine"
+version = "0.5.0"
+description = "Autonomous MCP tool for AI agent long-term memory, lessons, architectural decisions, and research notes"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "CurioGizmo" }
+]
+dependencies = [
+    "mcp>=2.2.0,<3",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/CurioGizmo/knowledge-engine"
+Repository = "https://github.com/CurioGizmo/knowledge-engine"
+Issues = "https://github.com/CurioGizmo/knowledge-engine/issues"
+
+[project.scripts]
+mcp-engine-install = "mcp_core.installer:run_all_installers"
+mcp-knowledge-engine = "mcp_knowledge.server:run_server"
+mcp-knowledge-install = "mcp_knowledge.installer:run_installer"
+mcp-audit-engine = "mcp_audit.server:run_server"
+mcp-audit = "mcp_audit.server:run_server"
+mcp-audit-install = "mcp_audit.installer:run_installer"
+mcp-skills-engine = "mcp_skills.server:run_server"
+mcp-skills = "mcp_skills.cli:main"
+mcp-skills-install = "mcp_skills.installer:run_installer"
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.8.0",
+    "types-PyYAML>=6.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_knowledge", "src/mcp_core", "src/mcp_audit", "src/mcp_skills", "src/mcp_plugins"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/plugins/knowledge-engine-plugin" = "src/mcp_plugins/knowledge-engine-plugin"
+"src/plugins/skills-engine-plugin" = "src/mcp_plugins/skills-engine-plugin"
+"src/plugins/audit-engine-plugin" = "src/mcp_plugins/audit-engine-plugin"
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+markers = [
+    "slow: долгие smoke-тесты (wheel-дистрибутив, живые клиенты) — запускаются отдельно, вне дефолтного прогона",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".agents"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",      # pycodestyle & pyflakes
+    "I",                # isort
+    "B",                # flake8-bugbear
+    "UP",               # pyupgrade (modern Python 3.11+)
+    "C90",              # mccabe complexity
+    "A",                # flake8-builtins
+    "ASYNC",            # flake8-async
+    "PTH",              # flake8-use-pathlib
+    "S",                # flake8-bandit (security)
+    "SIM",              # flake8-simplify
+    "T20",              # flake8-print (prevent print in MCP server)
+    "RUF",              # ruff-specific rules
+]
+ignore = [
+    "E501",    # Line too long (handled by formatter)
+    "RUF001",  # Ambiguous cyrillic characters in strings
+    "RUF002",  # Ambiguous cyrillic characters in docstrings
+    "RUF003",  # Ambiguous cyrillic characters in comments
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "F401", "F841", "B", "C901", "E402", "I001", "W293",
+    "S101", "S603", "S607", "S608", "T201", "A001", "A002", "PTH", "ASYNC", "SIM", "RUF"
+]
+"scripts/wheel_smoke_test.py" = ["S101", "S603"]  # Smoke-тест: assert и subprocess по определению
+"src/mcp_knowledge/server.py" = ["A002"]  # MCP protocol requires tool parameters named 'id' and 'type'
+"src/mcp_audit/server.py" = ["A002"]  # MCP protocol requires tool parameters named 'id'
+"src/mcp_audit/models.py" = ["A002"]  # Domain models require fields named 'id' and 'round'
+"src/mcp_knowledge/storage.py" = ["S608"]  # Dynamic FTS5 query construction
+"src/mcp_audit/storage.py" = ["S608"]  # Dynamic FTS5 query construction
+"src/mcp_core/sync.py" = ["S603", "S607"]  # Controlled git mv command
+"src/mcp_core/installer.py" = ["T201"]  # CLI output
+"src/mcp_knowledge/installer.py" = ["T201"]  # CLI output
+"src/mcp_knowledge/stats.py" = ["T201"]  # CLI output
+"src/mcp_audit/installer.py" = ["T201"]  # CLI output
+"src/mcp_skills/storage.py" = ["S608"]  # Dynamic FTS5 query construction
+"src/mcp_skills/cli.py" = ["T201"]  # CLI output
+"src/mcp_skills/installer.py" = ["T201"]  # CLI output
+"src/mcp_skills/git_manager.py" = ["S603", "S607"]  # Controlled git subprocess commands
+"src/mcp_skills/stack_detector.py" = ["S603", "S607"]  # Controlled git subprocess commands
+"src/mcp_core/rerank.py" = ["S608"]  # Dynamic FTS5 probe SQL
+"src/mcp_core/recall.py" = ["S608"]  # Dynamic FTS5 recall SQL
+"src/mcp_core/fts.py" = ["S608"]  # DDL construction
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+

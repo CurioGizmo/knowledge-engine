@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "knowledge-engine": {
+      "command": "mcp-knowledge-engine",
+      "args": [],
+      "force_all_tools_eager": true,
+      "tools": {
+        "search_knowledge": {
+          "eager": true
+        },
+        "get_knowledge": {
+          "eager": true
+        },
+        "record_knowledge": {
+          "eager": true
+        },
+        "update_knowledge_status": {
+          "eager": true
+        },
+        "review_knowledge": {
+          "eager": true
+        },
+        "get_help": {
+          "eager": true
+        },
+        "propose_hypothesis": {
+          "eager": true
+        },
+        "resolve_hypotheses": {
+          "eager": true
+        }
+      }
+    }
+  }
+}

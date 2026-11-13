@@ -1,0 +1,16 @@
+{
+  "name": "knowledge-engine-plugin",
+  "version": "0.5.0",
+  "description": "Institutional memory, engineering decisions (ADR), lessons learned, hypotheses and gotchas",
+  "author": {
+    "name": "CurioGizmo"
+  },
+  "keywords": [
+    "knowledge",
+    "memory",
+    "adr",
+    "hypotheses",
+    "antipatterns",
+    "mcp"
+  ]
+}
