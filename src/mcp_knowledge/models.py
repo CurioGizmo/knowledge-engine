@@ -349,6 +349,18 @@ class CardRecordRequest(BaseModel):
         description="Явное подтверждение создания дубликата при force=True (фаза 2)",
     )
 
+    @field_validator("source", mode="before")
+    @classmethod
+    def coerce_source_string(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            clean = v.strip().lower()
+            if clean in KnowledgeSource._value2member_map_:
+                return clean
+            return KnowledgeSource.AUTO_INFERRED
+        if v is None:
+            return KnowledgeSource.AUTO_INFERRED
+        return v
+
     @model_validator(mode="before")
     @classmethod
     def normalize_context_and_symptoms(cls, data: Any) -> Any:
@@ -488,7 +500,12 @@ class CardStatusUpdateRequest(BaseModel):
     @classmethod
     def coerce_source_string(cls, v: Any) -> Any:
         if isinstance(v, str):
-            return v.strip().lower()
+            clean = v.strip().lower()
+            if clean in KnowledgeSource._value2member_map_:
+                return clean
+            return KnowledgeSource.AUTO_INFERRED
+        if v is None:
+            return KnowledgeSource.AUTO_INFERRED
         return v
 
     @model_validator(mode="after")
@@ -606,6 +623,10 @@ class HypothesisResolution(BaseModel):
         default=None,
         description="Причина опровержения/тупика (обязательно при refute, min 15 символов)",
     )
+    note: str | None = Field(
+        default=None,
+        description="Альтернативный алиас для refutation_reason (при action='refute')",
+    )
     merge_into: str | None = Field(
         default=None,
         description="ID карточки для слияния аргумента опровержения в секцию нюансов",
@@ -624,12 +645,13 @@ class HypothesisResolution(BaseModel):
 
     @model_validator(mode="after")
     def validate_action_fields(self) -> HypothesisResolution:
-        if self.action == "refute" and (
-            not self.refutation_reason or len(self.refutation_reason.strip()) < 15
-        ):
-            raise ValueError(
-                "Для действия 'refute' обязательно поле 'refutation_reason' длиной не менее 15 символов"
-            )
+        if self.action == "refute":
+            effective_reason = (self.refutation_reason or "").strip() or (self.note or "").strip()
+            if len(effective_reason) < 15:
+                raise ValueError(
+                    "Для действия 'refute' обязательно поле 'refutation_reason' (или 'note') длиной не менее 15 символов"
+                )
+            self.refutation_reason = effective_reason
         if self.action == "confirm" and (not self.solution or len(self.solution.strip()) < 10):
             raise ValueError(
                 "Для действия 'confirm' обязательно поле 'solution' длиной не менее 10 символов"

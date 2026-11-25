@@ -1,6 +1,6 @@
 {
   "name": "skills-engine-plugin",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Modular skills catalog, dynamic slot compilation, and interactive FSM development flows",
   "author": {
     "name": "CurioGizmo"

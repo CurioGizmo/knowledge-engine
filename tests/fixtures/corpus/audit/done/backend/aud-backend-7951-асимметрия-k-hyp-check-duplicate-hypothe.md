@@ -6,13 +6,12 @@ category: backend
 priority: important
 autonomy: high
 complexity: M
-status: planned
+status: completed
 target_file: src/mcp_knowledge/storage.py
 symbol: check_duplicate_hypothesis
 created_at: '2026-11-09'
-updated_at: '2026-11-09'
+updated_at: '2026-11-15'
 ---
-
 # aud-backend-7951: Асимметрия K-HYP: check_duplicate_hypothesis не фильтрует symptom-токены — конкурирующие гипотезы блокируются на создании
 
 ## ❌ Симптом
@@ -23,3 +22,6 @@ Live-проб ревью (шаг 3): вторая конкурирующая г�
 
 ## 🛠 Предлагаемое решение
 Применить тот же symptom_tokens-фильтр в check_duplicate_hypothesis: перед пороговым сравнением hypo_overlap < ANTIPATTERN_REFUTED_THRESHOLD пересчитать overlap по (tokens_hypo - symptom_tokens) и (tokens_cand - symptom_tokens). Регресс-тест: две конкурирующие гипотезы («задержка из-за DNS» vs «задержка из-за пула PostgreSQL») — вторая должна создаваться без force.
+
+## ✅ Фактическое решение (Actual resolution)
+- 2026-11-15: Устранена асимметрия в check_duplicate_hypothesis: подключен classify_confirm_candidate и фильтрация токенов симптома перед проверкой overlap причин; конкурирующие гипотезы создаются без блокировки

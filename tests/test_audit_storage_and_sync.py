@@ -504,3 +504,59 @@ def test_search_debt_and_ready_backlog_return_dates(
     assert reindexed is not None
     assert reindexed.created_at == "2026-11-01"
     assert reindexed.updated_at is not None
+
+
+def test_move_card_lock_safety_and_windows_fsync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Проверка безопасности блокировок move_card и совместимости с Windows (aud-backend-b7e9)."""
+    import sys
+    from mcp_core.sync import move_card
+
+    src_dir = tmp_path / "src_dir"
+    target_dir = tmp_path / "target_dir"
+    src_dir.mkdir()
+    target_dir.mkdir()
+
+    card_file = src_dir / "aud-test-1234.md"
+    card_file.write_text("Card content", encoding="utf-8")
+
+    # Имитируем Windows (sys.platform = 'win32')
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    dest = move_card(card_file, target_dir)
+    assert dest.exists()
+    assert dest.parent == target_dir
+    assert not card_file.exists()
+    assert dest.read_text(encoding="utf-8") == "Card content"
+
+
+def test_search_artifacts_batch_sync_info(
+    temp_audit_env: tuple[Path, AuditStorage, AuditSynchronizer],
+) -> None:
+    """Проверка оптимизации 2N+1: search_artifacts получает path и mtime пакетно."""
+    _, storage, synchronizer = temp_audit_env
+
+    issue = AuditIssue(
+        id="aud-perf-batch1",
+        title="Batch sync info optimization",
+        category="backend",
+        priority=AuditPriority.IMPORTANT,
+        autonomy=AuditAutonomy.HIGH,
+        complexity=AuditComplexity.M,
+        status=AuditStatus.PLANNED,
+        blocked_by=[],
+        target_file="src/perf.py",
+        symbol="batch_fn",
+        symptom="2N+1 queries in search_artifacts",
+        root_cause="Separate find_card_path and _card_mtime_ns calls",
+        solution="Batch fetch from file_sync",
+    )
+    file_path = synchronizer.save_and_index_card(issue)
+
+    results = storage.search_artifacts(query="Batch sync info", artifact_type="debt")
+    assert len(results) == 1
+    res = results[0]
+    assert res["id"] == "aud-perf-batch1"
+    assert res["file_path"] == str(file_path.resolve())
+    assert res["artifact_type"] == "debt"

@@ -25,6 +25,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult
 from pydantic import ValidationError
 
+from mcp_core.db import register_temp_db
 from mcp_core.error_envelope import (
     ErrorRule,
     error_envelope_to_tool_result,
@@ -784,6 +785,7 @@ def create_server(
 
                 h = hashlib.sha256(str(r).encode()).hexdigest()[:12]
                 temp_db = Path(tempfile.gettempdir()) / f"mcp_knowledge_unanchored_{h}.db"
+                register_temp_db(temp_db)
                 store = KnowledgeStorage(db_path=temp_db, knowledge_dir=k_dir, create_dirs=False)
 
             svc = KnowledgeService(storage=store, knowledge_dir=k_dir)

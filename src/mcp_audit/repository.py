@@ -66,27 +66,33 @@ class PlanRepository:
     # Lookup
     # ------------------------------------------------------------------
     def get_unique(self, task_id: str, category: str | None = None) -> Path | None:
-        """Единственный lookup плана: 1 → он; 0 → None; >1 (без category) → AmbiguousPlanError.
+        """Единственный lookup плана: 1 → он; 0 → None; >1 → AmbiguousPlanError.
 
-        Indexed- и filesystem-поиск имеют одну семантику: индексные хиты
-        не шорткатят решение, а лишь пополняют общий набор совпадений.
+        A9: перед поиском берётся стабильный task-lock и выполняется recovery
+        маркеров незавершённого переноса. При отсутствии маркера два файла с
+        одинаковым task_id остаются неоднозначностью (выбор по mtime запрещён).
         """
         clean_task = sanitize_task_id(task_id)
         clean_cat = normalize_category_slug(category) if category else None
+
+        from mcp_audit.synchronizer import _advisory_lock
+
+        task_lock_path = Path(self._sync.plans_dir) / ".locks" / f"task-{clean_task}.lock"
+        with _advisory_lock(task_lock_path):
+            return self.get_unique_locked(clean_task, clean_cat)
+
+    def get_unique_locked(self, clean_task: str, clean_cat: str | None = None) -> Path | None:
+        """Выполняет recovery маркеров и поиск под уже удерживаемым task-lock."""
+        self._sync.recover_moves_for_task(clean_task)
 
         index_matches = self._plan_index_matches(clean_task, clean_cat)
         matches = index_matches + [
             p for p in self._plan_disk_matches(clean_task, clean_cat) if p not in index_matches
         ]
-        unique = {p.resolve(): p for p in matches}
+        unique = {p.resolve(): p for p in matches if p.is_file()}
         matches = list(unique.values())
 
         if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1 and category:
-            # внутри одной категории (дубли slug) — детерминированно
-            # первый по mtime, как прежде
-            matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
             return matches[0]
         if len(matches) > 1:
             raise AmbiguousPlanError(clean_task, matches)

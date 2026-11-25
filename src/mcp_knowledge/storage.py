@@ -6,7 +6,7 @@
 
 import re
 import sqlite3
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
@@ -15,17 +15,27 @@ from typing import Any, Literal
 from mcp_core.db import build_bm25_weights_sql
 from mcp_core.db import get_connection as core_get_connection
 from mcp_core.fts import SCHEMA_VERSION, fts5_table_sql, resolve_tokenizer, round_bm25_score
-from mcp_core.fuzzy import (
-    FUZZY_CANDIDATE_LIMIT,
-    FUZZY_THRESHOLD,
-    jaccard_word_best,
-    short_acronym_matches,
-)
-from mcp_core.rerank import SearchHit, matched_column_flags, rerank_hits
-from mcp_core.sanitizer import stem_russian
+from mcp_core.fuzzy import jaccard_word_best
 from mcp_core.schema_guard import FtsSpec, StorageSchemaSpec, ensure_storage_schema
+from mcp_core.text import (
+    morpho_diff as _morpho_diff,
+)
+from mcp_core.text import (
+    tokens_morpho_equal as _tokens_morpho_equal,
+)
 from mcp_knowledge.db_guard import _raise_sqlite_unavailable
 from mcp_knowledge.errors import DuplicateCardError
+from mcp_knowledge.hypothesis_classifier import (
+    ANTIPATTERN_CONFIRMED_THRESHOLD,
+    ANTIPATTERN_REFUTED_THRESHOLD,
+    DUP_SYMPTOM_THRESHOLD,
+    MIN_HYPO_TOKENS_FOR_OVERLAP,
+    MIN_TOKENS_FOR_OVERLAP,
+    _symptom_similarity,
+    _symptom_uniques_have_tech_differentiator,
+    _tokenize,
+    classify_confirm_candidate,
+)
 from mcp_knowledge.logger import logger
 from mcp_knowledge.models import (
     CardRecordRequest,
@@ -42,8 +52,15 @@ from mcp_knowledge.models import (
 )
 from mcp_knowledge.sanitizer import (
     build_multi_field_fts_query,
-    extract_short_acronym_tokens,
     sanitize_fts_query,
+)
+from mcp_knowledge.search_scoring import (
+    ALIASES_PROBE_SQL,
+    KNOWLEDGE_PROBE_WEIGHTS,
+    SYMPTOM_PROBE_SQL,
+    TITLE_PROBE_SQL,
+    _collect_fuzzy_knowledge_rows,
+    _rerank_knowledge_rows,
 )
 from mcp_knowledge.synchronizer import calculate_card_confidence
 from mcp_knowledge.telemetry import (
@@ -51,11 +68,6 @@ from mcp_knowledge.telemetry import (
     TelemetryMixin,
     read_tool_call_stats,
 )
-
-# Бюджет строк постраничного fuzzy-скана (канал 2 в _collect_fuzzy_knowledge_rows):
-# хвост таблицы обязан быть достижим (регрессия unordered LIMIT 200), но скан
-# гигантских таблиц ограничен сверху и не безлимитен.
-FUZZY_SCAN_ROW_BUDGET: int = 2000
 
 # 20 весов для колонок FTS5 таблицы knowledge_index:
 # 0.id, 1.title, 2.category, 3.type, 4.status, 5.source, 6.generated_by, 7.created_at,
@@ -79,7 +91,7 @@ BM25_WEIGHTS: tuple[float, ...] = (
     1.5,
     1.0,
     1.0,
-    1.5,
+    0.0,
     2.0,
     0.15,
 )
@@ -122,85 +134,6 @@ KNOWLEDGE_FTS_UNINDEXED = [
     "task_id",
     "refutation_reason",
 ]
-
-# Векторы зондирования совпадения колонок строгой арности 20
-KNOWLEDGE_PROBE_WEIGHTS: dict[str, tuple[float, ...]] = {
-    "title": (
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-    ),
-    "aliases": (
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-    ),
-    "symptom": (
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-    ),
-}
-TITLE_PROBE_SQL = build_bm25_weights_sql(KNOWLEDGE_PROBE_WEIGHTS["title"], 20)
-ALIASES_PROBE_SQL = build_bm25_weights_sql(KNOWLEDGE_PROBE_WEIGHTS["aliases"], 20)
-SYMPTOM_PROBE_SQL = build_bm25_weights_sql(KNOWLEDGE_PROBE_WEIGHTS["symptom"], 20)
-
-KNOWLEDGE_FIELD_BONUS: dict[str, float] = {
-    "title": 1.0,
-    "symptom": 0.5,
-    "aliases": 0.5,
-}
 
 FILE_SYNC_CREATE_SQL = """
     CREATE TABLE IF NOT EXISTS file_sync (
@@ -278,102 +211,23 @@ __all__ = [
     "HYP_DETAIL_THRESHOLD",
     "HYP_PENALTY",
     "HYP_SYMPTOM_THRESHOLD",
+    "KNOWLEDGE_PROBE_WEIGHTS",
     "MAX_TOTAL_SNIPPETS",
     "DuplicateCardError",
     "KnowledgeStorage",
+    "_tokens_morpho_equal",
+    "jaccard_word_best",
     "read_tool_call_stats",
 ]
 
 # Пороги token-overlap для детекции дубликатов (аудит H3: именованные константы
 # вместо магических чисел). Значения сохранены 1:1 с прежним кодом.
-DUP_SYMPTOM_THRESHOLD = 0.6  # check_duplicate: сильное совпадение симптомов
 DUP_DETAIL_THRESHOLD = 0.5  # check_duplicate: совпадение при сильном BM25-скоре
 DUP_PENALTY = -0.1  # check_duplicate: порог «сильного» BM25-скора
 HYP_SYMPTOM_THRESHOLD = 0.7  # check_duplicate_hypothesis: совпадение симптомов
 HYP_DETAIL_THRESHOLD = 0.6  # check_duplicate_hypothesis: совпадение при сильном BM25-скоре
 HYP_PENALTY = -0.2  # check_duplicate_hypothesis: порог «сильного» BM25-скора
-ANTIPATTERN_REFUTED_THRESHOLD = 0.45  # гипотезы: разные сути — не дубликат
-ANTIPATTERN_CONFIRMED_THRESHOLD = 0.75  # check_active_card_consistency: похожие активные карточки
 
-# Минимальная длина (в токенах) для доверия overlap-эвристике.
-MIN_TOKENS_FOR_OVERLAP = 4
-MIN_HYPO_TOKENS_FOR_OVERLAP = 3
-
-# K-HYP (ревью r2): связочные/служебные слова, не доказывающие совпадение
-# причин. При оценке «разные ли причины» они исключаются из собственных
-# токенов причин наряду с токенами симптомов: в коротких формулировках
-# («задержка из-за таймаута DNS» vs «задержка из-за таймаута пула»)
-# именно такие слова создавали ложный distinct-overlap >= 0.45.
-_REASON_STOPWORDS = frozenset(
-    {
-        # русские связки и связочные глаголы
-        "и",
-        "или",
-        "не",
-        "на",
-        "из",
-        "за",
-        "от",
-        "до",
-        "по",
-        "при",
-        "под",
-        "это",
-        "весь",
-        "все",
-        "всех",
-        "был",
-        "была",
-        "было",
-        "быть",
-        "когда",
-        "тогда",
-        "так",
-        "также",
-        "как",
-        "что",
-        "чтобы",
-        "если",
-        "возникает",
-        "происходит",
-        "вызван",
-        "вызвана",
-        "приводит",
-        "приводят",
-        "является",
-        "появляется",
-        # английские связки
-        "and",
-        "or",
-        "not",
-        "the",
-        "a",
-        "an",
-        "of",
-        "to",
-        "in",
-        "on",
-        "for",
-        "with",
-        "by",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "when",
-        "then",
-        "that",
-        "this",
-        "because",
-        "due",
-        "caused",
-        "causes",
-        "occurs",
-        "happens",
-    }
-)
 
 # Жесткий потолок суммарной выдачи фасетного поиска (search_faceted) и
 # дефолт max_total для _build_faceted_hint (аудит L-magic-12: единая константа).
@@ -448,571 +302,11 @@ KNOWLEDGE_STORAGE_SCHEMA_SPEC = StorageSchemaSpec(
 )
 
 
-# Ревью r8/r9 (P2, 2-символьные алиасы): токенайзер отбрасывает слова
-# короче 3 символов (`\w{3,}`), поэтому различитель «js»/«ts»/«py» в
-# причинах («heap js переполнен...» vs «heap ts переполнен...») терялся
-# и разные технологии давали ложный duplicate. Канонизация известных
-# коротких алиасов ДО токенизации сохраняет различитель в наборе токенов.
-_SHORT_ALIAS_CANON = {
-    "js": "javascript",
-    "ts": "typescript",
-    "py": "python",
-    "pg": "postgres",
-}
-
-
-def _canonicalize_short_aliases(text: str) -> str:
-    """Заменяет известные 2-символьные алиасы каноническими формами."""
-    return _SHORT_ALIAS_WORD_PATTERN.sub(lambda m: _SHORT_ALIAS_CANON[m.group(0).lower()], text)
-
-
-_SHORT_ALIAS_WORD_PATTERN = re.compile(r"\b(?:js|ts|py|pg)\b", re.IGNORECASE)
-
-
-def _tokenize(text: str) -> set[str]:
-    """Разбивает текст на множество токенов (слова длиной 3+, lowercase).
-
-    Короткие алиасы (js/ts/py) канонизируются до полного термина — см.
-    ``_SHORT_ALIAS_CANON``: иначе они выпадают из набора токенов и причины
-    разных технологий склеиваются в ложный duplicate.
-    """
-    return set(_TOKEN_PATTERN.findall(_canonicalize_short_aliases(text.lower())))
-
-
-def _symptom_similarity(text_a: str, text_b: str) -> tuple[float, int]:
-    """Считает overlap-сходство двух текстов по методу Jaccard-минимум.
-
-    Возвращает (overlap, min_tokens). Если один из текстов пуст (0 токенов),
-    возвращает (0.0, 0) — вычислять overlap нет смысла (инвариант прежнего кода).
-    """
-    tokens_a = _tokenize(text_a)
-    tokens_b = _tokenize(text_b)
-    if not tokens_a or not tokens_b:
-        return 0.0, 0
-    min_tokens = min(len(tokens_a), len(tokens_b))
-    overlap = len(tokens_a & tokens_b) / min_tokens
-    return overlap, min_tokens
-
-
 def _clean_categories(categories: list[str] | None, limit: int = 5) -> list[str]:
     """Очищает и нормализует список категорий: strip+lower, дедупликация, срез до limit."""
     if not categories:
         return []
     return list(dict.fromkeys(d.strip().lower() for d in categories if d and d.strip()))[:limit]
-
-
-# Ревью r4: хвосты-флексии для морфологической эквивалентности токенов.
-# Флексия — короткое окончание (≤ 4 букв); общий префикс при этом должен
-# оставаться значимой частью слова (≥ 3 символов). «переполнение» и
-# «переписывание» имеют общий префикс «переп», но хвосты по 7-8 букв —
-# это не флексии, а разные корни.
-_RU_FLEXION_SUFFIXES = frozenset(
-    {
-        "а",
-        "я",
-        "ы",
-        "и",
-        "ов",
-        "ев",
-        "ах",
-        "ях",
-        "ей",
-        "ой",
-        "ам",
-        "ям",
-        "ом",
-        "ем",
-        "у",
-        "ю",
-        "е",
-        "ь",
-        "ий",
-        "ый",
-        "ая",
-        "ые",
-        "ое",
-        "ее",
-        "ет",
-        "ут",
-        "ют",
-        "ат",
-        "ят",
-        "ся",
-        "ась",
-        "ось",
-        "ется",
-        "утся",
-        "ются",
-        "ится",
-        "ятся",
-        "ать",
-        "ять",
-        "ить",
-        "ла",
-        "ло",
-        "ли",
-        "л",
-        "на",
-        "но",
-        "ны",
-        "н",
-        "т",
-        "ешь",
-        "ишь",
-        "ит",
-    }
-)
-_EN_FLEXION_SUFFIXES = frozenset({"s", "es", "ed", "ing", "en", "er", "est"})
-
-
-def _unique_tokens_are_paronyms(tokens_a: set[str], tokens_b: set[str]) -> bool:
-    """Проверяет, являются ли уникальные токены паронимами (похожие, но разные слова).
-
-    Ревью r4 (п. 1/п. 2-разделитель): «переполнение» и «переписывание» —
-    общий префикс «переп» (>= 5), но это разные слова (паронимы), а не
-    формы одного слова. «переполнен» и «исчерпан» — несвязанные поверхности
-    (префикс < 5): при высоком совпадении остального это синонимы.
-    Ревью r8 (P2): алиасы одного термина (postgres/postgresql) — НЕ
-    паронимы, несмотря на общий префикс: см. ``_reason_tokens_related``.
-    """
-    for a in tokens_a:
-        for b in tokens_b:
-            if _reason_tokens_related(a, b):
-                # Ревью r8 (P2): алиасы/синонимы/формы одного термина
-                # не являются паронимами.
-                continue
-            n = 0
-            while n < min(len(a), len(b)) and a[n] == b[n]:
-                n += 1
-            if n >= 5 and not _tokens_morpho_equal(a, b):
-                return True
-    return False
-
-
-def _has_paronym_in_full(unique_tokens: set[str], full_tokens: set[str]) -> bool:
-    """Проверяет, есть ли у unique-токенов пароним в ПОЛНОМ наборе другой причины.
-
-    Ревью r5 (D1): дифференцирующий токен («переписывается») может быть
-    паронимом токена, вычтенного из другой стороны как симптомный
-    («переполняется»). Причина кандидата «Кэш ответов переполняется из-за
-    отсутствия вытеснения» содержит «переполняется» — пароним
-    «переписывается» (префикс «переп»). Такое расхождение — замена
-    похожего, но другого слова → причины различны.
-    """
-    for u in unique_tokens:
-        for f in full_tokens:
-            # Ревью r6 (N1): родственные формы (вложенные стемы:
-            # «переполнен»/«переполняется», словарные синонимы) — НЕ
-            # паронимы: это перефразирование одной причины.
-            if _reason_tokens_related(u, f):
-                continue
-            n = 0
-            while n < min(len(u), len(f)) and u[n] == f[n]:
-                n += 1
-            if n >= 5:
-                return True
-    return False
-
-
-# Ревью r5 (D2): известные группы синонимов для позитивного доказательства
-# «синонимичной перефразировки» одной причины. Расширяется по мере
-# нахождения ложных uncertain в ревью; консервативный минимум.
-# Ревью r6 (D1 верификации): пары заменены КЛАССАМИ — «переполняется»/
-# «исчерпан» (кросс-форменные комбинации) раньше давали ложный distinct,
-# потому что stem_russian("исчерпан") = None (суффикс «-ан» не срезается)
-# и морфология не склеивала формы. Класс содержит все поверхностные формы
-# одного термина; синонимия классов транзитивна для любых форм.
-# Пример: классы {переполнен, переполнение, переполняется, ...} и
-# {исчерпан, исчерпание, исчерпается, исчерпана, ...} синонимичны, значит
-# «пул переполняется из-за утечки» == «пул исчерпан из-за утечки».
-_REASON_SYNONYM_CLASSES: tuple[frozenset[str], ...] = (
-    # ёмкость/ресурсы: переполнение == исчерпание == закончилась
-    frozenset(
-        {
-            "переполнен",
-            "переполняется",
-            "переполнение",
-            "переполнены",
-            "переполнялся",
-        }
-    ),
-    frozenset(
-        {
-            "исчерпан",
-            "исчерпана",
-            "исчерпание",
-            "исчерпается",
-            "исчерпаны",
-            "исчерпался",
-            "закончилась",
-            "кончился",
-        }
-    ),
-    # latency: медленный == низкий == туго
-    frozenset({"медленный", "медлительный", "медленно", "низкий", "туго"}),
-    # англ.
-    frozenset({"slow", "sluggish", "laggy"}),
-    frozenset({"fast", "quick", "rapid"}),
-)
-# Пары классов, между которыми любые формы считаются синонимами.
-_REASON_SYNONYM_CLASS_LINKS = frozenset(
-    {
-        # переполнение == исчерпание (ёмкость/ресурсы)
-        (0, 1),
-        # медленный == низкий (внутри одного класса 2 уже), между 2 и 0/1 нет
-    }
-)
-# Ревью r8 (P2): известные алиасы одного термина (названия технологий,
-# СУБД и т.п.) — разные поверхности, обозначающие одну сущность.
-# Паронимная эвристика (префикс >= 5) принимала их за разные слова.
-_REASON_ALIAS_PAIRS = frozenset(
-    {
-        tuple(sorted(pair))
-        for pair in (
-            ("postgres", "postgresql"),
-            ("postgres", "pgsql"),
-            ("pgsql", "postgresql"),
-            ("postgres", "pg"),
-            ("mongo", "mongodb"),
-            ("sqlite", "sqlite3"),
-            ("memcache", "memcached"),
-            ("node", "nodejs"),
-            ("k8s", "kubernetes"),
-            ("memory", "ram"),
-            ("cpu", "процессор"),
-            # Ревью r11 (п. 1): mysql и mariadb — РАЗНЫЕ СУБД (форк
-            # разошёлся), не алиасы: confirm не должен считать разные
-            # причины дублем, а duplicate_of — закрывать гипотезу как
-            # superseded. Оба остаются известными tech-терминами для
-            # различителя (см. _KNOWN_TECH_TERMS).
-            # js/ts/py канонизируются до полных форм в _tokenize —
-            # см. _SHORT_ALIAS_CANON; javascript/typescript/python
-            # связаны с алиасами автоматически.
-        )
-    }
-)
-# Плоский словарь пар поверхностных форм для быстрого lookup: строится из
-# декартова произведения форм связанных классов + всех пар внутри класса
-# (морфология одного слова).
-_REASON_SYNONYM_PAIRS = frozenset(
-    pair
-    for i, class_a in enumerate(_REASON_SYNONYM_CLASSES)
-    for j, class_b in enumerate(_REASON_SYNONYM_CLASSES)
-    if i == j or (min(i, j), max(i, j)) in _REASON_SYNONYM_CLASS_LINKS
-    for a in class_a
-    for b in class_b
-    if a != b
-    for pair in (((a, b) if a < b else (b, a)),)
-)
-
-
-def _all_unique_pairs_symmetrically_related(tokens_a: set[str], tokens_b: set[str]) -> bool:
-    """Проверяет, что ВСЕ unique-токены ОБЕИХ сторон имеют пару.
-
-    Ревью r5 (D2): позитивное доказательство «синонимичной перефразировки» —
-    морфологическое родство (равные/вложенные стемы: «переполнен»/
-    «переполняются» → «переполн») ИЛИ известная пара синонимов
-    (``_REASON_SYNONYM_PAIRS``: «переполнен»/«исчерпан»). Антонимы
-    («медленный»/«быстрый») и произвольные замены стемов не проходят →
-    uncertain, а не duplicate.
-    Ревью r6 (B2/N2): проверка симметрична — каждый unique-токен tokens_b
-    тоже обязан иметь пару в tokens_a. Раньше односторонняя проверка
-    объявляла дублем причину с независимым доп. термином («... при утечке
-    соединений»), которого нет у гипотезы.
-    """
-    return _reason_tokens_all_matched(tokens_a, tokens_b) and (
-        _reason_tokens_all_matched(tokens_b, tokens_a)
-    )
-
-
-def _verdict_equal_reasons(
-    reason: str,
-    hypo_symptom: str,
-    cand_symptom: str,
-) -> Literal["duplicate", "uncertain"]:
-    """Вердикт для дословно совпадающих текстов причин.
-
-    Ревью r6 (G1): причина, целиком состоящая из слов симптома и связок,
-    причинных данных не содержит — совпадение пустых по смыслу текстов
-    не доказывает дубликат. Дубль только при наличии собственных
-    содержательных токенов.
-    """
-    equal_symptom_tokens = _tokenize(hypo_symptom) | _tokenize(cand_symptom)
-    own_tokens = _tokenize(reason) - equal_symptom_tokens - _REASON_STOPWORDS
-    if own_tokens:
-        return "duplicate"
-    return "uncertain"
-
-
-def _symptom_uniques_have_tech_differentiator(uniq_req: set[str], uniq_cand: set[str]) -> bool:
-    """Проверяет, есть ли в уникальных токенах симптомов различитель технологий.
-
-    Ревью r10 (остаточный JSvsTS на симптоме): «утечка памяти
-    js-приложения» vs «...ts-приложения» — после канонизации различитель
-    javascript/typescript остаётся в уникальных токенах обеих сторон и
-    относится к РАЗНЫМ каноническим терминам (не alias-паре, не морфологии).
-    Обычные перефразирования («транскрибация» vs «обработка») — не
-    различители: неизвестные гэпу поверхности покрываются fuzzy-порогом.
-    """
-    if not uniq_req or not uniq_cand:
-        return False
-    for a in uniq_req:
-        for b in uniq_cand:
-            if _reason_tokens_related(a, b):
-                # Формы/синонимы/алиасы одного термина — не различитель.
-                continue
-            # Ревью r10 (верификация): различитель — ОБА токена пары
-            # известные термины стека/СУБД (postgres vs mysql,
-            # javascript vs typescript). Односторонняя проверка
-            # («известный + произвольное перефразирование»: «переполнен»
-            # vs «забит») пропускала настоящие дубли — прилагательные
-            # из словарей синонимов не являются tech-различителями.
-            if a in _KNOWN_TECH_TERMS and b in _KNOWN_TECH_TERMS:
-                return True
-    return False
-
-
-# Канонические формы терминов стека/СУБД для различителя симптомов:
-# только поверхности алиасов и канонические формы коротких алиасов
-# (js/ts/py/pg → javascript/typescript/python/postgres). Классы
-# синонимов причин (переполнен/исчерпан/медленный/...) НЕ входят —
-# это описательные прилагательные, а не термины технологий.
-# Ревью r11 (п. 3): пары независимых терминов (mysql без mariadb-связи)
-# тоже должны быть известными различителями — отдельный список.
-_ALIAS_SURFACE_FORMS = frozenset(term for pair in _REASON_ALIAS_PAIRS for term in pair) | set(
-    _SHORT_ALIAS_CANON.values()
-)
-_INDEPENDENT_TECH_TERMS = frozenset(
-    {
-        # Ревью r11 (п. 1): mysql/mariadb — разные СУБД; каждый термин
-        # известен независимо, но парой НЕ связан.
-        "mysql",
-        "mariadb",
-    }
-)
-_KNOWN_TECH_TERMS = _ALIAS_SURFACE_FORMS | _INDEPENDENT_TECH_TERMS
-
-
-def _distinct_reason_tokens(
-    tokens_hypo: set[str],
-    tokens_cand: set[str],
-    symptom_tokens: set[str],
-) -> tuple[set[str], set[str]]:
-    """Вычисляет собственные содержательные токены причин (минус симптомные).
-
-    K-HYP (ревью r2): причины часто «пересыпаны» словами симптома и
-    связками («задержка ответа сервера из-за таймаута DNS-резолвера») —
-    сравниваются только собственные термины каждой стороны.
-    """
-    return (
-        tokens_hypo - symptom_tokens - _REASON_STOPWORDS,
-        tokens_cand - symptom_tokens - _REASON_STOPWORDS,
-    )
-
-
-def _classify_empty_distinct_reasons(
-    tokens_hypo: set[str], tokens_cand: set[str]
-) -> Literal["duplicate", "distinct", "uncertain"]:
-    """Классифицирует случай, когда обе причины не имеют собственных токенов.
-
-    K-HYP (ревью r2, дефект A): причины повторяют симптом. Дифференцирующий
-    термин может лежать В СИМПТОМЕ («...из-за таймаута DNS-резолвера» vs
-    «...таймаута пула соединений»), поэтому сравниваются ПОЛНЫЕ наборы
-    токенов причин. Ревью r6 (G1): полное совпадение пустых по смыслу
-    причин — НЕ доказательство дубликата: причинных данных нет.
-    Ревью r8 (P1): сравнение полных наборов должно учитывать и словарные
-    синонимы («пул переполнен при утечке» vs «пул исчерпан при утечке»
-    при симптоме, содержащем оба слова) — не только строгую морфологию.
-    """
-    full_diff_hypo = _morpho_diff(tokens_hypo, tokens_cand)
-    full_diff_cand = _morpho_diff(tokens_cand, tokens_hypo)
-    if not full_diff_hypo and not full_diff_cand:
-        # Ревью r6 (G1): обе причины дословно повторяют симптом — причинных
-        # данных нет вовсе, совпадение причин не доказано (нечем доказывать).
-        # Прежний duplicate позволял закрыть гипотезу как дубликат без
-        # единого причинного токена; правильный вердикт — uncertain.
-        return "uncertain"
-    if full_diff_hypo and full_diff_cand:
-        # Ревью r11 (п. 2): расхождения в этой ветке — слова СИМПТОМОВ
-        # (distinct-наборы обеих причин пусты, собственных терминов нет).
-        # Синонимная замена («переполнен»→«исчерпан», оба слова в симптоме)
-        # не добавляет причинных сведений — как и дословное совпадение
-        # пустых причин (G1), это НЕ доказывает дубль → uncertain.
-        # Прежний duplicate позволял закрыть гипотезу (confirm/duplicate_of)
-        # без доказанной причины.
-        if _all_unique_pairs_symmetrically_related(full_diff_hypo, full_diff_cand):
-            return "uncertain"
-        # Каждая причина содержит термин, отсутствующий у другой —
-        # дифференциатор в симптоме (r2, дефект A: «dns» vs «пула»).
-        return "distinct"
-    # Одна причина вкладывается в другую — данных недостаточно.
-    return "uncertain"
-
-
-def _reason_tokens_related(a: str, b: str) -> bool:
-    """Проверяет, являются ли два токена формами/синонимами одной сущности.
-
-    Ревью r6: единый критерий «позитивного доказательства» совпадения причин:
-    морфологическая эквивалентность (``_tokens_morpho_equal``), словарная
-    пара синонимов (``_REASON_SYNONYM_PAIRS``) или вложенные стемы
-    (``переполнен``/``переполняется`` → ``переполн`` ⊂ ``переполняетс``).
-    Антонимы («медленный»/«быстрый») и паронимы («переполнение»/
-    «переписывание») сюда НЕ входят — это разные термины.
-    Ревью r8 (P2): алиасы одного термина (postgres/postgresql) —
-    одна сущность (``_REASON_ALIAS_PAIRS``).
-    """
-    if _tokens_morpho_equal(a, b):
-        return True
-    if ((a, b) if a < b else (b, a)) in _REASON_SYNONYM_PAIRS:
-        return True
-    if ((a, b) if a < b else (b, a)) in _REASON_ALIAS_PAIRS:
-        return True
-    stem_a = stem_russian(a)
-    stem_b = stem_russian(b)
-    # Одинаковые или вложенные стемы (переполн/переполняетс)
-    return bool(
-        stem_a is not None
-        and stem_b is not None
-        and (stem_a == stem_b or stem_a.startswith(stem_b) or stem_b.startswith(stem_a))
-    )
-
-
-def _reason_tokens_all_matched(tokens: set[str], other: set[str]) -> bool:
-    """Проверяет, что каждый токен одного набора имеет эквивалент в другом.
-
-    Ревью r6 (B1/N1): пара «переполняется»/«переполнен» (родственные
-    глагольные формы) и словарная пара «переполнен»/«исчерпан» — одна
-    причина, но ранний overlap-гейт видел сырые разные поверхности и
-    давал ложный distinct. Совпавшими считаются также пары, связанные
-    морфологией или словарём синонимов (``_reason_tokens_related``).
-    """
-    for t in tokens:
-        if t in other:
-            continue
-        if any(_reason_tokens_related(t, o) for o in other):
-            continue
-        return False
-    return True
-
-
-def _classify_single_difference(
-    unique_hypo: set[str],
-    unique_cand: set[str],
-    overlap_distinct: float,
-) -> Literal["duplicate", "distinct", "uncertain"]:
-    """Классифицирует единственное расхождение при высоком совпадении остального.
-
-    Ревью r4: «переполнен» vs «исчерпан» — синоним перефразирования; пароним
-    («переполнение» vs «переписывание», общий префикс >= 5) — разные слова.
-    Ревью r5 (D2): синонимия требует ПОЗИТИВНОГО доказательства (морфология
-    или словарь ``_REASON_SYNONYM_PAIRS``); антонимы и произвольные замены
-    дают ``uncertain``, а не ``duplicate``.
-    Ревью r6 (B2/N2): позитивное доказательство синонимии ДОЛЖНО быть
-    симметричным — каждый unique-токен ОБЕИХ сторон обязан иметь пару
-    (морфологию или словарный синоним). Одностороннее совпадение, когда
-    вторая причина добавляет независимый термин («...при утечке
-    соединений»), доказательством совпадения причин не является →
-    ``uncertain``.
-    """
-    # Ревью r6 (B1): overlap_distinct считается по строгому
-    # морфологическому пересечению и не видит словарные синонимы:
-    # «пул переполнен из-за утечки» vs «пул исчерпан из-за утечки»
-    # даёт 2/3 = 0.67 < 0.75 → ложный distinct, хотя единственное
-    # расхождение — словарная пара. Related-пары (морфология/синонимы/
-    # вложенные стемы) снимают ранний distinct-гейт.
-    related_pairs = {
-        (a, b) if a < b else (b, a)
-        for a in unique_hypo
-        for b in unique_cand
-        if a != b and _reason_tokens_related(a, b)
-    }
-    if overlap_distinct < ANTIPATTERN_CONFIRMED_THRESHOLD and not related_pairs:
-        # Каждая причина содержит собственный термин, отсутствующий
-        # у другой — причины доказуемо различны. Ревью r6 (B1): словарная
-        # пара («переполнен»/«исчерпан») — тоже совпадение, гейт на ней
-        # не срабатывает.
-        return "distinct"
-    if _unique_tokens_are_paronyms(unique_hypo, unique_cand):
-        # Паронимы при высоком совпадении остального —
-        # разные термины, причины различны.
-        return "distinct"
-    # Ревью r11 (п. 3): пара известных РАЗНЫХ терминов стека/СУБД
-    # (postgres vs mysql) — доказуемое различие причин, а не
-    # «недостаточность данных»: confirm должен создавать draft (или
-    # блокироваться distinct-путём), а не топтаться в uncertain.
-    if _symptom_uniques_have_tech_differentiator(unique_hypo, unique_cand):
-        return "distinct"
-    # Ревью r5 (D2): без позитивного доказательства синонимии
-    # (антонимы «медленный»/«быстрый», произвольные замены)
-    # объявлять дублем нельзя — но и различие не доказано.
-    # Ревью r6 (B2/N2): доказательство симметрично по обеим сторонам —
-    # только морфологическое родство (равные стемы) ИЛИ словарная пара
-    # синонимов для КАЖДОГО unique-токена с ОБЕИХ сторон; иначе —
-    # uncertain, а не duplicate.
-    if _all_unique_pairs_symmetrically_related(unique_hypo, unique_cand):
-        return "duplicate"
-    return "uncertain"
-
-
-def _tokens_morpho_equal(a: str, b: str) -> bool:
-    """Проверяет, являются ли два токена формами одного слова.
-
-    K-HYP (ревью r2/r4): «пуст» и «пустой», «кэш» и «кэши» — формы одного
-    слова; «переполнение» и «переписывание» — разные слова (раньше ложно
-    склеивались 5-символьным префиксом), «пул переполнен» и «пул исчерпан» —
-    разные термины.
-
-    Критерий (гибридный):
-    1. Одинаковые стемы русского стеммера (``stem_russian`` из mcp_core)
-       — формы одного слова.
-    2. Общий префикс ≥ 3 символов, и ОБА оставшихся хвоста — известные
-       флексии (≤ 4 букв): «цикл-е»/«цикл-ах», «переполня-ется»/
-       «переполня-ются».
-    3. Короткое слово — ЦЕЛИКОМ префикс длинного, а остаток — флексия:
-       «воркер»/«воркеры», «worker»/«workers».
-    """
-    if a == b:
-        return True
-
-    stem_a = stem_russian(a)
-    stem_b = stem_russian(b)
-    if stem_a is not None and stem_b is not None and stem_a == stem_b:
-        return True
-
-    n = 0
-    while n < min(len(a), len(b)) and a[n] == b[n]:
-        n += 1
-    tail_a = a[n:]
-    tail_b = b[n:]
-    is_cyrillic = any("а" <= c <= "я" for c in a) and any("а" <= c <= "я" for c in b)
-    flex = _RU_FLEXION_SUFFIXES if is_cyrillic else _EN_FLEXION_SUFFIXES
-    # Общий префикс — значимая часть слова, оба хвоста — флексии.
-    if n >= 3 and tail_a in flex and tail_b in flex:
-        return True
-    # Короткое слово целиком — префикс длинного, остаток — флексия.
-    if len(a) < len(b) and len(a) >= 3 and a == b[: len(a)]:
-        return b[len(a) :] in flex
-    if len(b) < len(a) and len(b) >= 3 and b == a[: len(b)]:
-        return a[len(b) :] in flex
-    return False
-
-
-def _morpho_diff(tokens_a: set[str], tokens_b: set[str]) -> set[str]:
-    """Токены A, не имеющие морфологического эквивалента в B."""
-    result: set[str] = set()
-    for a in tokens_a:
-        if not any(_tokens_morpho_equal(a, b) for b in tokens_b):
-            result.add(a)
-    return result
-
-
-def _morpho_intersection(tokens_a: set[str], tokens_b: set[str]) -> set[str]:
-    """Токены A, имеющие морфологический эквивалент в B."""
-    result: set[str] = set()
-    for a in tokens_a:
-        if any(_tokens_morpho_equal(a, b) for b in tokens_b):
-            result.add(a)
-    return result
 
 
 def _build_symptom_fts_query(symptom: str) -> str | None:
@@ -1053,281 +347,6 @@ HINT_MATCHING_DRAFTS = (
     "По вашему запросу найдены черновики в карантине (draft). "
     "Повторите поиск с include_drafts=true или укажите свой task_id."
 )
-
-
-def _collect_short_acronym_knowledge(
-    cursor: sqlite3.Cursor,
-    short_tokens: set[str],
-    extra_conditions: list[str],
-    extra_params: list[Any],
-    all_seen_ids: set[str],
-    needed: int,
-) -> list[tuple[Any, ...]]:
-    """Точный fallback по 2-буквенным акронимам (акронимы <3 символов не индексируются trigram)."""
-    short_where_parts = []
-    if extra_conditions:
-        short_where_parts.extend(extra_conditions)
-    short_where = f"WHERE {' AND '.join(short_where_parts)}" if short_where_parts else ""
-    s_sql = f"""
-        SELECT
-            id, title, category, type, status, source, confidence, task_id, symptom,
-            stale_after, refutation_reason, body, generated_by, solution
-        FROM knowledge_index
-        {short_where}
-        LIMIT ?;
-    """
-    try:
-        cursor.execute(s_sql, [*extra_params, 100])
-        s_candidates = cursor.fetchall()
-    except sqlite3.OperationalError:
-        return []
-
-    collected: list[tuple[Any, ...]] = []
-    for cr in s_candidates:
-        cid = cr[0]
-        if cid in all_seen_ids:
-            continue
-        doc_blob = f"{cr[0] or ''} {cr[1] or ''} {cr[8] or ''}"
-        if short_acronym_matches(short_tokens, doc_blob):
-            f_row = (
-                cr[0],
-                cr[1],
-                cr[2],
-                cr[3],
-                cr[4],
-                cr[5],
-                cr[6],
-                cr[7],
-                cr[8],
-                cr[9],
-                cr[10],
-                -1.0,
-                cr[11],
-                cr[12],
-            )
-            collected.append(f_row)
-            all_seen_ids.add(cid)
-            if len(collected) >= needed:
-                break
-    return collected
-
-
-def _fuzzy_scan_all_pages(
-    cursor: sqlite3.Cursor,
-    score_rows: Callable[[list[tuple[Any, ...]]], None],
-    extra_where: str,
-    extra_params: list[Any],
-) -> None:
-    """Постраничный полный скан knowledge_index устойчивым порядком (ORDER BY rowid).
-
-    Канал 2 fuzzy-догона: хвост таблицы (rowid > FUZZY_CANDIDATE_LIMIT) обязан
-    быть достижим — неупорядоченный LIMIT 200 отрезал релевантные карточки.
-    Скан ограничен бюджетом FUZZY_SCAN_ROW_BUDGET строк (не безлимитен).
-    """
-    page_size = FUZZY_CANDIDATE_LIMIT
-    offset = 0
-    while True:
-        page_sql = f"""
-            SELECT
-                id, title, category, type, status, source, confidence, task_id, symptom,
-                stale_after, refutation_reason, body, generated_by, solution
-            FROM knowledge_index
-            WHERE {extra_where}
-            ORDER BY rowid
-            LIMIT {page_size} OFFSET {offset};
-        """
-        try:
-            cursor.execute(page_sql, extra_params)
-            scan_rows = cursor.fetchall()
-        except sqlite3.OperationalError:
-            return
-        if not scan_rows:
-            return
-        score_rows(scan_rows)
-        if len(scan_rows) < page_size or offset + page_size >= FUZZY_SCAN_ROW_BUDGET:
-            return
-        offset += page_size
-
-
-def _collect_fuzzy_knowledge_rows(
-    cursor: sqlite3.Cursor,
-    where_clause: str,
-    params: list[Any],
-    query: str,
-    existing_rows: list[tuple[Any, ...]],
-    limit: int,
-) -> list[tuple[Any, ...]]:
-    """Выполняет fuzzy-догон кандидатов при нехватке MATCH-хитов.
-
-    Канал отбора кандидатов совместим с unicode61-индексом (измерение плана E:
-    триграммный MATCH по unicode61 возвращает 0 строк — мёртвый код):
-    1) подстрочный LIKE-префильтр по title/symptom/solution/body (ловит опечатки
-       в середине слова без триграммного индекса);
-    2) постраничный скан всей таблицы устойчивым порядком (ORDER BY rowid) —
-       неупорядоченный LIMIT 200 отрезал хвост (>200 карточек недостижимы).
-    Скоринг и порог (Jaccard >= FUZZY_THRESHOLD) не изменились.
-    """
-    tokens_3 = [t for t in re.findall(r"[A-Za-zА-Яа-я0-9_]+", query) if len(t) >= 3]
-    short_tokens = extract_short_acronym_tokens(query)
-    if len(existing_rows) >= limit or (not tokens_3 and not short_tokens):
-        return []
-
-    existing_ids = {r[0] for r in existing_rows}
-    extra_conditions = where_clause.split(" AND ")[1:]
-    extra_params = list(params[1:])
-    extra_where = " AND ".join(extra_conditions) if extra_conditions else "1=1"
-
-    fuzzy_cands: dict[str, tuple[tuple[Any, ...], float]] = {}
-
-    def _score_rows(rows: list[tuple[Any, ...]]) -> None:
-        for cr in rows:
-            cid = cr[0]
-            if cid in existing_ids:
-                continue
-            doc_text = f"{cr[1] or ''} {cr[8] or ''} {cr[13] or ''} {cr[11] or ''}"
-            for tok in tokens_3:
-                jaccard = jaccard_word_best(tok, doc_text)
-                if jaccard >= FUZZY_THRESHOLD and (
-                    cid not in fuzzy_cands or jaccard > fuzzy_cands[cid][1]
-                ):
-                    fuzzy_cands[cid] = (cr, jaccard)
-
-    for tok in tokens_3:
-        # Канал 1: подстрочный префильтр LIKE '%tok%' — unicode61-совместимый
-        # способ recall опечаток в середине слова (измерен на контрольном корпусе).
-        like_pattern = f"%{tok.lower()}%"
-        like_conditions = [extra_where] if extra_where != "1=1" else []
-        like_conditions.append(
-            "(lower(title) LIKE ? OR lower(symptom) LIKE ? OR lower(solution) LIKE ? "
-            "OR lower(body) LIKE ?)"
-        )
-        like_where = " AND ".join(like_conditions)
-        like_sql = f"""
-            SELECT
-                id, title, category, type, status, source, confidence, task_id, symptom,
-                stale_after, refutation_reason, body, generated_by, solution
-            FROM knowledge_index
-            WHERE {like_where}
-            ORDER BY rowid
-            LIMIT {FUZZY_CANDIDATE_LIMIT};
-        """
-        try:
-            cursor.execute(
-                like_sql, [*extra_params, like_pattern, like_pattern, like_pattern, like_pattern]
-            )
-            _score_rows(cursor.fetchall())
-        except sqlite3.OperationalError:
-            continue
-
-    # Канал 2: постраничный полный скан устойчивым порядком.
-    _fuzzy_scan_all_pages(cursor, _score_rows, extra_where, list(extra_params))
-
-    needed = limit - len(existing_rows)
-    sorted_cands = sorted(fuzzy_cands.values(), key=lambda item: (-item[1], item[0][0]))
-    fuzzy_rows: list[tuple[Any, ...]] = []
-    for cr, jaccard in sorted_cands[:needed]:
-        f_row = (
-            cr[0],
-            cr[1],
-            cr[2],
-            cr[3],
-            cr[4],
-            cr[5],
-            cr[6],
-            cr[7],
-            cr[8],
-            cr[9],
-            cr[10],
-            -jaccard,
-            cr[11],
-            cr[12],
-        )
-        fuzzy_rows.append(f_row)
-
-    # Фаза 2b: Точный fallback по 2-буквенным акронимам
-    remaining_needed = limit - len(existing_rows) - len(fuzzy_rows)
-    if short_tokens and remaining_needed > 0:
-        all_seen_ids = {r[0] for r in existing_rows} | {r[0] for r in fuzzy_rows}
-        short_rows = _collect_short_acronym_knowledge(
-            cursor, short_tokens, extra_conditions, extra_params, all_seen_ids, remaining_needed
-        )
-        fuzzy_rows.extend(short_rows)
-
-    return fuzzy_rows
-
-
-def _rerank_knowledge_rows(
-    conn: sqlite3.Connection,
-    rows: list[tuple[Any, ...]],
-    fuzzy_rows: list[tuple[Any, ...]],
-    sanitized_query: str,
-) -> list[tuple[Any, ...]]:
-    """Переранжирует MATCH и fuzzy хиты с учетом тиров доверия и field bonuses."""
-    status_ranks = {
-        KnowledgeStatus.VERIFIED.value: 1,
-        KnowledgeStatus.ACTIVE.value: 2,
-        KnowledgeStatus.SUSPECT.value: 3,
-        KnowledgeStatus.HYPOTHESIS.value: 4,
-    }
-
-    hits: list[SearchHit] = []
-    row_map: dict[str, tuple[Any, ...]] = {}
-
-    for r in rows:
-        row_map[r[0]] = r
-        gen_by = r[13] if len(r) > 13 else None
-        status = r[4] if len(r) > 4 else None
-        human_tier = 1 if gen_by == "human" else 2
-        status_tier = status_ranks.get(str(status) if status else "", 5)
-        trust_rank = human_tier * 10 + status_tier
-
-        if len(r) > 17:
-            flags = {
-                "title": bool(r[15]),
-                "aliases": bool(r[16]),
-                "symptom": bool(r[17]),
-            }
-        else:
-            flags = matched_column_flags(
-                conn,
-                "knowledge_index",
-                r[0],
-                KNOWLEDGE_PROBE_WEIGHTS,
-                sanitized_query,
-            )
-        matched_cols = sum(1 for v in flags.values() if v)
-        raw_bm25 = float(r[11]) if r[11] is not None else 0.0
-        hits.append(
-            SearchHit(
-                id=r[0],
-                raw_bm25=raw_bm25,
-                matched_columns=matched_cols,
-                field_matches=flags,
-                trust_rank=trust_rank,
-            )
-        )
-
-    for r in fuzzy_rows:
-        row_map[r[0]] = r
-        gen_by = r[13] if len(r) > 13 else None
-        status = r[4] if len(r) > 4 else None
-        human_tier = 1 if gen_by == "human" else 2
-        status_tier = status_ranks.get(str(status) if status else "", 5)
-        trust_rank = 1000 + human_tier * 10 + status_tier
-
-        raw_bm25 = float(r[11]) if r[11] is not None else 0.0
-        hits.append(
-            SearchHit(
-                id=r[0],
-                raw_bm25=raw_bm25,
-                matched_columns=0,
-                field_matches={},
-                trust_rank=trust_rank,
-            )
-        )
-
-    reranked_hits = rerank_hits(hits, field_bonus=KNOWLEDGE_FIELD_BONUS)
-    return [row_map[h.id] for h in reranked_hits]
 
 
 class KnowledgeStorage(TelemetryMixin):
@@ -1453,17 +472,20 @@ class KnowledgeStorage(TelemetryMixin):
         task_id: str | None = None,
         limit: int = 5,
         include_drafts: bool = False,
+        sync: bool = True,
     ) -> list[KnowledgeSnippet]:
         """Выполняет полнотекстовый поиск с BM25 ранжированием и сортировкой по статусу доверия."""
         limit = max(1, min(limit, 20))
-        self.sync()
+        if sync:
+            self.sync()
 
         and_query = sanitize_fts_query(query, operator="AND")
         or_query = sanitize_fts_query(query, operator="OR")
         if not and_query or and_query == '""':
             return []
 
-        candidate_limit = max(limit * 3, 15)
+        pool_limit = max(limit * 4, limit)
+        candidate_limit = max(pool_limit * 2, 30)
 
         def _build_search_sql(where_sql: str) -> str:
             return f"""
@@ -1508,7 +530,7 @@ class KnowledgeStorage(TelemetryMixin):
             sql = _build_search_sql(where_clause)
             params_sql = list(params)
             params_sql.append(candidate_limit)
-            params_sql.append(limit)
+            params_sql.append(pool_limit)
 
             used_query = and_query
             try:
@@ -1528,7 +550,7 @@ class KnowledgeStorage(TelemetryMixin):
                     sql_or = _build_search_sql(where_clause_or)
                     params_sql_or = list(params_or)
                     params_sql_or.append(candidate_limit)
-                    params_sql_or.append(limit)
+                    params_sql_or.append(pool_limit)
                     cursor.execute(sql_or, params_sql_or)
                     rows = cursor.fetchall()
                     used_query = or_query
@@ -1554,7 +576,7 @@ class KnowledgeStorage(TelemetryMixin):
                     cursor, where_clause, params, query, rows, limit
                 )
             ordered_rows = _rerank_knowledge_rows(conn, rows, fuzzy_rows, used_query)
-            return [self._row_to_snippet(r) for r in ordered_rows]
+            return [self._row_to_snippet(r) for r in ordered_rows[:limit]]
 
     @staticmethod
     def _row_to_snippet(row: tuple[Any, ...]) -> KnowledgeSnippet:
@@ -1622,7 +644,11 @@ class KnowledgeStorage(TelemetryMixin):
             category=str(c_category),
             type=type_enum,
             status=status_enum,
-            source=KnowledgeSource(c_source),
+            source=(
+                KnowledgeSource(c_source)
+                if c_source and str(c_source).lower() in KnowledgeSource._value2member_map_
+                else KnowledgeSource.AUTO_INFERRED
+            ),
             badge=badge,
             confidence=conf_val,
             task_id=str(c_task_id) if c_task_id else None,
@@ -1631,9 +657,10 @@ class KnowledgeStorage(TelemetryMixin):
             score=score_val,
         )
 
-    def get_project_overview(self) -> ProjectOverview:
+    def get_project_overview(self, sync: bool = True) -> ProjectOverview:
         """Собирает динамическую сводку тем проекта (Project Overview) и распределение карточек по категориям."""
-        self.sync()
+        if sync:
+            self.sync()
 
         try:
             with self.get_connection() as conn:
@@ -1978,12 +1005,13 @@ class KnowledgeStorage(TelemetryMixin):
         if include_archived:
             status_cond = "1=1"
         elif task_id:
-            # task_id открывает свои draft/hypothesis-карточки — тот же контракт,
-            # что и в _build_search_conditions (query-слой). Иначе агент не видит
-            # свои черновики в своей задаче даже при явном task_id.
+            # task_id открывает свои draft-карточки в слое категорий.
+            # Карточки со статусом hypothesis выбираются исключительно выделенным
+            # слоем гипотез (_collect_hypotheses), чтобы не утекать в category_results
+            # при include_hypotheses=False и не дедуплицироваться раньше времени.
             status_cond = (
                 f"(status IN ({ACTIVE_STATUS_SQL}) "
-                f"OR (status IN ('{KnowledgeStatus.HYPOTHESIS.value}', '{KnowledgeStatus.DRAFT.value}') AND task_id = ?)) "
+                f"OR (status = '{KnowledgeStatus.DRAFT.value}' AND task_id = ?)) "
                 f"AND {antipattern_exclude_sql}"
             )
             status_params.append(task_id)
@@ -1999,8 +1027,10 @@ class KnowledgeStorage(TelemetryMixin):
             cursor = conn.cursor()
 
             # 2. Слой текстового поиска (query_results)
+            clean_cats = _clean_categories(categories)
+            clean_cats_set = set(clean_cats)
             if query and query.strip():
-                target_category = categories[0] if categories and len(categories) == 1 else None
+                target_category = clean_cats[0] if clean_cats and len(clean_cats) == 1 else None
                 raw_query_snippets = self.search(
                     query=query.strip(),
                     category=target_category,
@@ -2009,9 +1039,14 @@ class KnowledgeStorage(TelemetryMixin):
                     include_drafts=include_drafts,
                     task_id=task_id,
                     limit=clamped_limit * 2,
+                    sync=False,
                 )
                 for snippet in raw_query_snippets:
-                    if categories and len(categories) > 1 and snippet.category not in categories:
+                    if (
+                        clean_cats
+                        and len(clean_cats) > 1
+                        and snippet.category.lower() not in clean_cats_set
+                    ):
                         continue
                     if (
                         snippet.type != KnowledgeType.ANTIPATTERN
@@ -2066,7 +1101,9 @@ class KnowledgeStorage(TelemetryMixin):
                 )
 
         # 6. Сводка проекта (Project Overview)
-        overview: ProjectOverview | None = self.get_project_overview() if include_overview else None
+        overview: ProjectOverview | None = (
+            self.get_project_overview(sync=False) if include_overview else None
+        )
 
         # 7. Детерминированный hint
         hint: str | None
@@ -2490,6 +1527,31 @@ class KnowledgeStorage(TelemetryMixin):
 
                     # Если симптом совпал, проверяем суть гипотезы.
                     # Разные конкурирующие гипотезы для одного симптома НЕ являются дубликатами.
+                    # K-HYP (aud-backend-7951): устраняем асимметрию с confirm-путём —
+                    # вызываем classify_confirm_candidate для фильтрации токенов симптома
+                    # и морфологического анализа причин.
+                    classify_verdict = self.classify_confirm_candidate(
+                        hypo_symptom=req.symptom,
+                        hypo_reason=req.hypothesis,
+                        cand_symptom=candidate_symptom,
+                        cand_root_cause=str(candidate_root_cause or ""),
+                    )
+                    if classify_verdict == "distinct":
+                        continue
+                    if classify_verdict == "duplicate":
+                        return str(candidate_id)
+
+                    # Для uncertain сверяем overlap по токенам причин за вычетом симптомов
+                    s_tokens = _tokenize(req.symptom) | _tokenize(candidate_symptom)
+                    h_tokens_hypo = _tokenize(req.hypothesis) - s_tokens
+                    h_tokens_cand = _tokenize(str(candidate_root_cause or "")) - s_tokens
+                    if h_tokens_hypo and h_tokens_cand:
+                        overlap = len(h_tokens_hypo & h_tokens_cand) / min(
+                            len(h_tokens_hypo), len(h_tokens_cand)
+                        )
+                        if overlap < ANTIPATTERN_REFUTED_THRESHOLD:
+                            continue
+
                     hypo_overlap, min_hypo_tokens = _symptom_similarity(
                         req.hypothesis, str(candidate_root_cause or "")
                     )
@@ -2515,151 +1577,7 @@ class KnowledgeStorage(TelemetryMixin):
             )
         return None
 
-    @staticmethod
-    def classify_confirm_candidate(
-        hypo_symptom: str,
-        hypo_reason: str,
-        cand_symptom: str,
-        cand_root_cause: str,
-    ) -> Literal["duplicate", "distinct", "uncertain"]:
-        """Классифицирует кандидата при confirm гипотезы.
-
-        Сравнивает симптом гипотезы с симптомом кандидата,
-        а текст предполагаемой причины гипотезы — с root_cause кандидата.
-
-        K-HYP (ревью шага 3, раунд r2): общие токены СИМПТОМА «загрязняют»
-        overlap текстов причин — «задержка из-за DNS» и «исчерпан пул
-        PostgreSQL» на пересыпанных симптомом формулировках дают
-        overlap >= ANTIPATTERN_REFUTED_THRESHOLD и ложно классифицируются
-        как duplicate. Дополнительно (раунд r2): служебные/связочные слова
-        («из-за», «таймаута», «возникает») в коротких наборах причин дают
-        ложный distinct-overlap, а причина гипотезы, состоящая только из
-        слов симптома, падала в fallthrough-duplicate. Решение:
-
-        1. «Разные ли причины» оценивается по СОДЕРЖАТЕЛЬНЫМ собственным
-           токенам причин — за вычетом токенов симптомов (обеих сторон)
-           и связочных слов (``_REASON_STOPWORDS``).
-        2. Если у причины гипотезы содержательных собственных токенов нет
-           (она дословно повторяет симптом), доказательства совпадения
-           тоже нет → ``uncertain``; если при этом и у кандидата их нет
-           (обе причины = симптом) → истинный ``duplicate``.
-        """
-        s_hypo = hypo_symptom.strip().lower()
-        s_cand = cand_symptom.strip().lower()
-        symptom_matched = s_hypo == s_cand
-        if not symptom_matched:
-            overlap, min_tokens = _symptom_similarity(hypo_symptom, cand_symptom)
-            symptom_matched = bool(
-                min_tokens >= MIN_TOKENS_FOR_OVERLAP and overlap >= DUP_SYMPTOM_THRESHOLD
-            )
-
-        if not symptom_matched:
-            return "distinct"
-
-        tokens_hypo = _tokenize(hypo_reason or "")
-        tokens_cand = _tokenize(cand_root_cause or "")
-        if (
-            len(tokens_hypo) < MIN_HYPO_TOKENS_FOR_OVERLAP
-            or len(tokens_cand) < MIN_HYPO_TOKENS_FOR_OVERLAP
-        ):
-            return "uncertain"
-
-        h_hypo = hypo_reason.strip().lower()
-        h_cand = cand_root_cause.strip().lower()
-        if h_hypo == h_cand:
-            # Ревью r6 (G1): дословное совпадение текстов причин — дубль,
-            # ТОЛЬКО если причина содержит собственные содержательные
-            # токены вне слов симптома и связок (см. ``_verdict_equal_reasons``).
-            return _verdict_equal_reasons(hypo_reason, hypo_symptom, cand_symptom)
-
-        overlap_hypo, min_h_tokens = _symptom_similarity(hypo_reason, cand_root_cause)
-        # Ревью r6 (B1/N1): ранний distinct-гейт не должен срабатывать на
-        # перефразировании одного и того же состояния: родственные
-        # глагольные формы («переполняется»/«переполнен») и словарные
-        # синонимы («переполнен»/«исчерпан») считаются совпавшими, иначе
-        # короткие причины («пул переполнен из-за утечки» vs «пул исчерпан
-        # из-за утечки») дают ложный distinct при overlap < 0.45.
-        raw_overlap_is_rephrase = _reason_tokens_all_matched(
-            tokens_hypo, tokens_cand
-        ) and _reason_tokens_all_matched(tokens_cand, tokens_hypo)
-        if (
-            min_h_tokens >= MIN_HYPO_TOKENS_FOR_OVERLAP
-            and overlap_hypo < ANTIPATTERN_REFUTED_THRESHOLD
-            and not raw_overlap_is_rephrase
-            # Ревью r2 (дефект B): ранний distinct-выход пропускал вниз
-            # перефразированные дубли с морфологией («кэш переполняется» vs
-            # «кэши переполняются»): сырой overlap < порога, хотя причины
-            # морфологически идентичны. Если ПОЧТИ все токены имеют
-            # морфологический эквивалент (уникальных нет с обеих сторон),
-            # ранний distinct не срабатывает — разбираем ниже.
-            and (
-                bool(_morpho_diff(tokens_hypo, tokens_cand))
-                or bool(_morpho_diff(tokens_cand, tokens_hypo))
-            )
-        ):
-            return "distinct"
-
-        # K-HYP (r2): оценка «разные ли причины» по содержательным
-        # собственным токенам — минус токены симптомов и связочные слова.
-        symptom_tokens = _tokenize(hypo_symptom) | _tokenize(cand_symptom)
-        distinct_hypo, distinct_cand = _distinct_reason_tokens(
-            tokens_hypo, tokens_cand, symptom_tokens
-        )
-        if not distinct_hypo and not distinct_cand:
-            # Обе причины не имеют собственных содержательных токенов
-            # (повторяют симптомы). Различие всё же возможно: дифференцирующий
-            # термин может лежать В СИМПТОМЕ (ревью r2, дефект A:
-            # «...из-за таймаута DNS-резолвера» vs «...таймаута пула
-            # соединений», где «dns» и «пула» входят и в симптомы).
-            # Сравниваем полные наборы токенов причин.
-            return _classify_empty_distinct_reasons(tokens_hypo, tokens_cand)
-        if not distinct_hypo or not distinct_cand:
-            # Причина одной из сторон дословно повторяет симптом, у другой
-            # есть собственные токены — совпадение недоказуемо.
-            return "uncertain"
-        # Морфологическое сравнение собственных токенов причин:
-        # «кэш»/«кэши», «переполняется»/«переполняются» — одна причина,
-        # а «dns» vs «пула» — разные (ревью r2, дефект B).
-        unique_hypo = _morpho_diff(distinct_hypo, distinct_cand)
-        unique_cand = _morpho_diff(distinct_cand, distinct_hypo)
-        matched = _morpho_intersection(distinct_hypo, distinct_cand)
-        min_distinct = min(len(distinct_hypo), len(distinct_cand))
-        overlap_distinct = len(matched) / min_distinct
-
-        # Ревью r5 (D1): дифференциатор может быть паронимом токена,
-        # вычтенного из другой стороны как симптомного («переписывается»
-        # vs вычтенное «переполняется»). Проверяем unique-токены против
-        # ПОЛНЫХ наборов причин другой стороны (включая симптомные вхождения).
-        if unique_hypo and _has_paronym_in_full(unique_hypo, tokens_cand):
-            return "distinct"
-        if unique_cand and _has_paronym_in_full(unique_cand, tokens_hypo):
-            return "distinct"
-
-        if unique_hypo and unique_cand:
-            # Ревью r4/r5: единственное расхождение при полном совпадении
-            # остального — см. ``_classify_single_difference``.
-            return _classify_single_difference(unique_hypo, unique_cand, overlap_distinct)
-        # Ревью r6 (B2/N2): одна сторона добавила независимые термины
-        # (unique есть ТОЛЬКО у неё). Совпадение причинных признаков не
-        # доказано: кандидат может описывать ДРУГУЮ причину с теми же
-        # ключевыми словами («... при утечке соединений»). Консервативно —
-        # uncertain, а не fallthrough-duplicate.
-        # Ревью r6 (N1): исключение — все односторонние unique-токены
-        # related к ПОЛНОМУ набору другой причины (морфология/синонимы/
-        # вложенные стемы: «переполнен» vs вычтенное как симптомное
-        # «переполняется») — это перефразирование одной причины → дубль.
-        if unique_hypo or unique_cand:
-            if unique_hypo and _reason_tokens_all_matched(unique_hypo, tokens_cand):
-                return "duplicate"
-            if unique_cand and _reason_tokens_all_matched(unique_cand, tokens_hypo):
-                return "duplicate"
-            return "uncertain"
-        if overlap_distinct < ANTIPATTERN_REFUTED_THRESHOLD:
-            return "distinct"
-
-        # Обе причины содержательно совпадают и не имеют уникальных
-        # терминов — подтверждённый дубликат.
-        return "duplicate"
+    classify_confirm_candidate = staticmethod(classify_confirm_candidate)
 
     def classify_confirm(
         self,

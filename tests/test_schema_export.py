@@ -60,11 +60,11 @@ async def test_export_server_schemas_knowledge(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_export_server_schemas_audit(tmp_path: Path) -> None:
-    """Проверяет экспорт схем для audit-engine: ровно 12 инструментов (включая get_help)."""
+    """Проверяет экспорт схем для audit-engine: 14 инструментов (включая get_plan_versions, restore_plan_version и get_help)."""
     server = create_audit_server(project_root=tmp_path)
     schemas = await export_server_schemas(server)
 
-    assert len(schemas) == 12
+    assert len(schemas) == 14
     expected = {
         "check_known_debt",
         "get_ready_backlog",
@@ -74,6 +74,8 @@ async def test_export_server_schemas_audit(tmp_path: Path) -> None:
         "record_plan",
         "update_plan",
         "step_plan",
+        "get_plan_versions",
+        "restore_plan_version",
         "record_review",
         "get_task_context",
         "search_artifacts",

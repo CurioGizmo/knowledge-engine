@@ -397,3 +397,70 @@ async def test_update_plan_prefix_matching_does_not_mutate_v2_plan(test_project_
     )
     assert ctx_v2.structured_content["plan"]["status"] == "discussed"
     assert ctx_v2.structured_content["plan"]["id"] == "plan-backend-TASK-ALPHA-V2"
+
+
+@pytest.mark.asyncio
+async def test_record_review_passes_category_to_update_plan(tmp_path: Path) -> None:
+    """aud-backend-5444: record_review передает category в update_plan_details."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+
+    server = create_server(project_root=project_root)
+
+    # 1. Создаем план с task_id='TASK-MULTI' в категории backend
+    await server.call_tool(
+        "record_plan",
+        {
+            "task_id": "TASK-MULTI",
+            "title": "Бэкенд сервис",
+            "steps": ["Шаг бэкенда"],
+            "category": "backend",
+        },
+    )
+
+    # 2. Создаем второй план с тем же task_id='TASK-MULTI' в категории frontend напрямую на диске
+    frontend_dir = project_root / ".agents" / "plans" / "active" / "frontend"
+    frontend_dir.mkdir(parents=True, exist_ok=True)
+    frontend_plan_file = frontend_dir / "plan-frontend-TASK-MULTI.md"
+    frontend_plan_file.write_text(
+        "---\n"
+        "task_id: TASK-MULTI\n"
+        "title: Фронтенд интерфейс\n"
+        "category: frontend\n"
+        "status: discussed\n"
+        "created_at: 2026-04-18T10:00:00+00:00\n"
+        "updated_at: 2026-04-18T10:00:00+00:00\n"
+        "---\n\n"
+        "# План: Фронтенд интерфейс\n\n"
+        "## Шаги реализации\n\n"
+        "- [ ] Шаг фронтенда\n",
+        encoding="utf-8",
+    )
+
+    # 3. Вызываем record_review с category='backend' и verdict='approved'
+    rev_res = await server.call_tool(
+        "record_review",
+        {
+            "task_id": "TASK-MULTI",
+            "category": "backend",
+            "verdict": "approved",
+            "summary": "Ревью бэкенда одобрено",
+            "comments": [],
+        },
+    )
+    assert rev_res.structured_content["status"] == "created"
+
+    # 4. Проверяем напрямую статус в файлах на диске:
+    backend_plans = list((project_root / ".agents" / "plans" / "active" / "backend").glob("*.md"))
+    frontend_plans = list((project_root / ".agents" / "plans" / "active" / "frontend").glob("*.md"))
+    assert len(backend_plans) == 1
+    assert len(frontend_plans) == 1
+
+    from mcp_audit.parser import parse_plan_markdown
+
+    p_back = parse_plan_markdown(backend_plans[0].read_text(encoding="utf-8"))
+    p_front = parse_plan_markdown(frontend_plans[0].read_text(encoding="utf-8"))
+
+    assert p_back.status.value == "approved"
+    assert p_front.status.value == "discussed"

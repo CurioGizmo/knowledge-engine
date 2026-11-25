@@ -35,7 +35,10 @@ def _real_skills_dir() -> Path | None:
     cat = get_companion_skills_dir()
     if cat and (cat / "flows").is_dir():
         return cat
-    for cand in (REPO_ROOT.parent / "mcp_skills",):
+    for cand in (
+        REPO_ROOT.parent / "mcp_skills",
+        Path("/home/anton/projects/mcp_skills"),
+    ):
         if (cand / "flows").is_dir():
             return cand
     return None
@@ -313,6 +316,43 @@ def test_query_tokens_still_min_three_chars() -> None:
     }
     ordered, _ = _score_flows([flow], "на код")
     assert not ordered, "2-символьный токен «на» не должен матчить подстрокой"
+
+
+def test_aliases_with_prepositions_and_short_substring_queries_do_not_spray() -> None:
+    """Предлоги в aliases («на», «по», «to») не попадают в structural short terms, а «or»/«it»/«id» не матчатся подстрокой."""
+    flows = [
+        {
+            "name": "review-flow",
+            "title": "For work before commit",
+            "description": "Checks for commit ideas and alternatives",
+            "aliases": ["задача по плану на техдолг", "run to pr"],
+            "when_to_use": ["при ревью"],
+            "intent_group": "review",
+        },
+        {
+            "name": "live-qa-flow",
+            "title": "QA Verification",
+            "description": "Live QA pipeline",
+            "aliases": ["run qa"],
+            "when_to_use": [],
+            "intent_group": "qa",
+        },
+    ]
+    # Предлог «на» в aliases не должен вызывать матчинг с aliases/when_to_use по «на»
+    res_na, _ = _score_flows(flows, "на код")
+    assert not res_na, f"Ложный хит по предлогу «на»: {res_na}"
+
+    res_po, _ = _score_flows(flows, "по памяти")
+    assert not res_po, f"Ложный хит по предлогу «по»: {res_po}"
+
+    # Короткие слова не должны матчиться подстрокой в title/description («for», «commit», «ideas»)
+    for q in ("or", "it", "id"):
+        res_short, _ = _score_flows(flows, q)
+        assert not res_short, f"Ложный подстрочный хит для {q!r}: {res_short}"
+
+    # Структурный 2-буквенный токен 'qa' из name/intent_group продолжает точно находить live-qa-flow
+    res_qa, _ = _score_flows(flows, "qa")
+    assert [f["name"] for f in res_qa] == ["live-qa-flow"]
 
 
 # ---------------------------------------------------------------------------

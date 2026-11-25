@@ -6,14 +6,13 @@ category: docs
 priority: important
 autonomy: high
 complexity: M
-status: planned
+status: completed
 target_file: src/mcp_knowledge/models.py
 symbol: HypothesisResolution
 task_id: mcp-simulation-round2
 created_at: '2026-10-13'
-updated_at: '2026-10-13'
+updated_at: '2026-11-24'
 ---
-
 # aud-docs-922b: resolve_hypotheses требует refutation_reason (>=15 символов), остальные инструменты — note: первый вызов всегда падает из-за несогласованности API
 
 ## ❌ Симптом
@@ -24,3 +23,6 @@ updated_at: '2026-10-13'
 
 ## 🛠 Предлагаемое решение
 Либо принять note как алиас refutation_reason в валидаторе (model_validator: если refutation_reason пуст и note задан — использовать note), либо вернуть в ошибке явный hint с точным именем поля и минимальной длиной. Дополнительно: отразить обязательность refutation_reason в description инструмента resolve_hypotheses и в JSON-схеме. Тест на оба имени поля.
+
+## ✅ Фактическое решение (Actual resolution)
+- 2026-11-24: Добавлено поле note в HypothesisResolution как fallback для refutation_reason с валидацией длины >= 15 символов с учётом strip. Обновлены docstrings и документация help_docs.py. Покрыто тестами.

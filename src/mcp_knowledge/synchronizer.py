@@ -199,6 +199,9 @@ class KnowledgeSynchronizer(BaseSynchronizer):
         synced_files: dict[str, tuple[float, int, str, int]],
         conflict: int = 0,
         index_content: bool = True,
+        frontmatter: CardFrontmatter | None = None,
+        sections: SectionCollection | None = None,
+        content: str | None = None,
     ) -> str | None:
         """Парсит и индексирует один файл карточки в транзакции SQLite.
 
@@ -206,12 +209,13 @@ class KnowledgeSynchronizer(BaseSynchronizer):
         не производится, file_sync сохраняется с conflict=1. frontmatter.id
         возвращается в любом случае (для dirty-учёта).
         """
-        try:
-            content = md_file.read_text(encoding="utf-8")
-            frontmatter, sections = parse_card_markdown(content)
-        except Exception as err:
-            logger.warning("Пропуск невалидного файла карточки %s: %s", md_file, err)
-            return None
+        if frontmatter is None or sections is None or content is None:
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                frontmatter, sections = parse_card_markdown(content)
+            except Exception as err:
+                logger.warning("Пропуск невалидного файла карточки %s: %s", md_file, err)
+                return None
 
         if frontmatter.id != md_file.stem:
             logger.warning(
@@ -301,7 +305,7 @@ class KnowledgeSynchronizer(BaseSynchronizer):
         }
         canonical_takeover = bool(prev_holders) and canonical_str not in prev_holders
 
-        for md_file, file_str, mtime, size, frontmatter, _sections, _content in sorted(
+        for md_file, file_str, mtime, size, frontmatter, sections, content in sorted(
             entries, key=lambda e: str(e[0].resolve()) == canonical_str
         ):
             is_canonical = file_str == canonical_str
@@ -327,6 +331,9 @@ class KnowledgeSynchronizer(BaseSynchronizer):
                 synced_files=synced_files,
                 conflict=0 if is_canonical else 1,
                 index_content=is_canonical,
+                frontmatter=frontmatter,
+                sections=sections,
+                content=content,
             )
             if is_canonical:
                 active_card_ids.add(frontmatter.id)
@@ -351,15 +358,23 @@ class KnowledgeSynchronizer(BaseSynchronizer):
         canonical_path = resolve_canonical_card_file([e[0] for e in remaining])
         if canonical_path is None:
             return
+        canon_str = str(canonical_path.resolve())
+        canon_entry = next((e for e in remaining if e[1] == canon_str), None)
+        fm = canon_entry[4] if canon_entry else None
+        sec = canon_entry[5] if canon_entry else None
+        cnt = canon_entry[6] if canon_entry else None
         self._index_card_file(
             cursor=cursor,
             md_file=canonical_path,
-            file_str=str(canonical_path.resolve()),
+            file_str=canon_str,
             mtime=canonical_path.stat().st_mtime,
             size=canonical_path.stat().st_size,
             synced_files=synced_files,
             conflict=0,
             index_content=True,
+            frontmatter=fm,
+            sections=sec,
+            content=cnt,
         )
         active_card_ids.add(card_id)
 

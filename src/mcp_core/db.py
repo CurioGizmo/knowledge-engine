@@ -1,9 +1,42 @@
 """Утилиты подключения и настройки SQLite WAL для MCP Agent Platform."""
 
+import atexit
+import contextlib
 import sqlite3
 from pathlib import Path
 
-__all__ = ["build_bm25_weights_sql", "get_connection"]
+__all__ = [
+    "build_bm25_weights_sql",
+    "cleanup_temp_dbs",
+    "get_connection",
+    "register_temp_db",
+]
+
+# Реестр эфемерных баз SQLite для незакреплённых корней (авто-очистка при выходе)
+_TEMP_DBS: set[Path] = set()
+
+
+def register_temp_db(path: Path | str) -> Path:
+    """Регистрирует путь временной SQLite базы для гарантированной очистки при завершении процесса."""
+    db_path = Path(path).resolve()
+    _TEMP_DBS.add(db_path)
+    return db_path
+
+
+def cleanup_temp_dbs() -> None:
+    """Удаляет все зарегистрированные временные базы SQLite и связанные WAL/SHM файлы."""
+    for db_file in list(_TEMP_DBS):
+        for path in (
+            db_file,
+            db_file.with_name(f"{db_file.name}-wal"),
+            db_file.with_name(f"{db_file.name}-shm"),
+        ):
+            with contextlib.suppress(Exception):
+                path.unlink(missing_ok=True)
+    _TEMP_DBS.clear()
+
+
+atexit.register(cleanup_temp_dbs)
 
 
 def get_connection(db_path: Path | str, timeout: float = 5.0) -> sqlite3.Connection:
@@ -25,6 +58,12 @@ def get_connection(db_path: Path | str, timeout: float = 5.0) -> sqlite3.Connect
 
     conn = sqlite3.connect(path_str, timeout=timeout)
     conn.row_factory = sqlite3.Row
+    conn.create_function(
+        "lower", 1, lambda s: s.lower() if isinstance(s, str) else s, deterministic=True
+    )
+    conn.create_function(
+        "upper", 1, lambda s: s.upper() if isinstance(s, str) else s, deterministic=True
+    )
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA busy_timeout = 5000;")
     conn.execute("PRAGMA synchronous = NORMAL;")

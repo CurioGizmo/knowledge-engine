@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from mcp_audit.models import (
     ReviewArtifact,
     TaskContextResponse,
 )
+from mcp_audit.parser import parse_plan_markdown
 from mcp_core.db import build_bm25_weights_sql
 from mcp_core.db import get_connection as core_get_connection
 from mcp_core.fts import SCHEMA_VERSION, fts5_table_sql, resolve_tokenizer, round_bm25_score
@@ -33,6 +35,13 @@ from mcp_core.schema_guard import (
     ensure_storage_schema,
 )
 from mcp_core.sync import drop_with_move_protection
+from mcp_core.text import (
+    is_technical_short_token,
+    short_acronym_matches,
+)
+from mcp_core.text import (
+    morpho_normalize as _morpho_normalize,
+)
 
 DEFAULT_LIMIT = 10
 
@@ -169,136 +178,27 @@ ART_TRIGGERS_CREATE_SQL = [
 # Сообщение об отсутствии совпадений в check_known_debt (общее для обеих веток).
 _NO_MATCH_MESSAGE = "Совпадений в реестре технического долга не обнаружено."
 
-# R6: служебные/предлоги, не несущие смысла симптома (для порога значимого покрытия).
-_INSIGNIFICANT_WORDS = frozenset(
-    {
-        "при",
-        "как",
-        "что",
-        "это",
-        "для",
-        "или",
-        "но",
-        "не",
-        "на",
-        "по",
-        "из",
-        "от",
-        "до",
-        "за",
-        "чем",
-        "так",
-        "там",
-        "все",
-        "его",
-        "она",
-        "они",
-        "под",
-        "the",
-        "and",
-        "for",
-        "with",
-        "this",
-        "that",
-        "from",
-        "into",
-        "when",
-        "then",
-    }
-)
 
-
-_RU_ADJ_ENDINGS = (
-    "иями",
-    "ыми",
-    "ями",
-    "ами",
-    "ого",
-    "его",
-    "ому",
-    "ему",
-    "ых",
-    "их",
-    "ую",
-    "юю",
-    "ое",
-    "ее",
-    "ые",
-    "ие",
-    "ом",
-    "ем",
-    "ым",
-    "им",
-    "ой",
-    "ей",
-    "ий",
-    "ый",
-    "ая",
-    "яя",
-)
-_RU_NOUN_ENDINGS = ("ах", "ям", "ях", "ом", "ем", "ам", "а", "я", "у", "ю", "е", "ы", "и")
-_RU_PARTICIPLE_SUFFIXES = ("ующ", "ющ", "ащ", "ящ", "вш", "ован", "еван")
-
-
-def _morpho_normalize(token: str) -> str:
-    """5бис-2: морфо-нормализация токена для overlap-сравнения.
-
-    Русские флексии: лёгкий стемминг (stem_russian) — «зависание» и
-    «зависания» дают общую основу; снятие возвратных постфиксов (-ся/-сь:
-    «дублируются»~«дублирует»), причастных/глагольных суффиксов и окончаний
-    прилагательных/существительных; финальное ы/и сводятся к «и».
-    Английские plural (A15): -es → - (processes → process), -s после
-    согласной → - (errors → error); ss/us не трогаем (process, status).
-    """
-    from mcp_core.sanitizer import stem_russian
-
-    t = token
-    # Снятие возвратных постфиксов -ся/-сь (дублируются -> дублируют)
-    if len(t) > 5 and (t.endswith("ся") or t.endswith("сь")):
-        t = t[:-2]
-
-    stem = stem_russian(t)
-    if stem is None:
-        stem = t
-        for adj in _RU_ADJ_ENDINGS:
-            if stem.endswith(adj) and len(stem) - len(adj) >= 3:
-                stem = stem[: -len(adj)]
-                break
-        else:
-            for noun in _RU_NOUN_ENDINGS:
-                if stem.endswith(noun) and len(stem) - len(noun) >= 4:
-                    stem = stem[: -len(noun)]
-                    break
-
-    for part_suf in _RU_PARTICIPLE_SUFFIXES:
-        if stem.endswith(part_suf) and len(stem) - len(part_suf) >= 4:
-            stem = stem[: -len(part_suf)]
-            break
-
-    if stem.endswith("иру") and len(stem) > 4:
-        stem = stem[:-1]  # дублиру -> дублир
-
-    if stem.endswith("es") and len(stem) > 4:
-        stem = stem[:-2]
-    if stem.endswith("s") and len(stem) > 3 and not stem.endswith(("ss", "us", "is")):
-        stem = stem[:-1]
-    if stem.endswith("ы") or stem.endswith("и"):
-        stem = stem[:-1] + "и"
-    return stem
+def _is_significant_token(t: str) -> bool:
+    """Определяет значимость токена по длине (>=4) или алгоритмическим признакам акронима."""
+    if len(t) >= 4:
+        return True
+    return is_technical_short_token(t)
 
 
 def _significant_tokens(text: str) -> set[str]:
-    """Значимые токены текста симптома: длина >= 4, не служебные, лоуэркейс.
+    """Значимые токены текста симптома: длина >= 4 или короткие технические акронимы, лоуэркейс.
 
     Дефисные термины разбиваются на под-токены (user-auth → user, auth).
+    Токенизация сохраняет регистр на этапе проверки акронимов (UI, API, SQL, БД).
     """
-    raw = re.findall(r"[а-яёa-z0-9-]+", text.lower())
+    raw = re.findall(r"[а-яёА-ЯЁa-zA-Z0-9-]+", text)
     result: set[str] = set()
     for tok in raw:
-        if "-" in tok:
-            result.update(part for part in tok.split("-") if len(part) >= 4)
-        elif len(tok) >= 4 and tok not in _INSIGNIFICANT_WORDS:
-            result.add(tok)
+        parts = tok.split("-") if "-" in tok else [tok]
+        for part in parts:
+            if _is_significant_token(part):
+                result.add(part.lower())
     return result
 
 
@@ -495,6 +395,7 @@ class AuditStorage:
         category: str | None = None,
         status: str | None = None,
         limit: int = 10,
+        include_sync_info: bool = False,
     ) -> list[dict[str, Any]]:
         """Полнотекстовый поиск по бэклогу с фильтрацией по категории и ранжированием BM25.
 
@@ -540,14 +441,37 @@ class AuditStorage:
             cursor.execute("\n".join(sql_parts), params)
             rows = cursor.fetchall()
 
+            def _attach_sync_info(items: list[dict[str, Any]]) -> None:
+                if not items:
+                    return
+                card_ids = [it["id"] for it in items]
+                placeholders = ",".join("?" for _ in card_ids)
+                cursor.execute(
+                    f"SELECT card_id, path, mtime FROM file_sync WHERE card_id IN ({placeholders});",
+                    card_ids,
+                )
+                sync_info = {
+                    r[0]: (r[1], int(r[2] * 1_000_000_000) if r[2] is not None else 0)
+                    for r in cursor.fetchall()
+                }
+                for it in items:
+                    info = sync_info.get(it["id"])
+                    it["file_path"] = info[0] if info else None
+                    it["mtime_ns"] = info[1] if info else 0
+
             # R6: точный канал коротких терминов — только если MATCH ничего не нашёл
             if not rows:
                 short_rows = self._short_acronym_search(
                     cursor, query, category, status, effective_limit
                 )
+                if include_sync_info:
+                    _attach_sync_info(short_rows)
                 return short_rows
 
-            return [self._row_to_dict(row) for row in rows]
+            items = [self._row_to_dict(row) for row in rows]
+            if include_sync_info:
+                _attach_sync_info(items)
+            return items
 
     def _short_acronym_search(
         self,
@@ -590,12 +514,7 @@ class AuditStorage:
         collected: list[dict[str, Any]] = []
         for cr in candidates:
             doc_blob = f"{cr[0] or ''} {cr[1] or ''} {cr[2] or ''}"
-            doc_tokens = {tok.lower() for tok in re.findall(r"[A-Za-zА-Яа-я0-9_-]+", doc_blob)}
-            split_subtokens: set[str] = set()
-            for tok in doc_tokens:
-                if "-" in tok or "_" in tok:
-                    split_subtokens.update(re.split(r"[-_]+", tok))
-            if short_tokens & (doc_tokens | split_subtokens):
+            if short_acronym_matches(short_tokens, doc_blob):
                 collected.append(self._row_to_dict(cr))
                 if len(collected) >= limit:
                     break
@@ -1056,6 +975,17 @@ class AuditStorage:
             )
             conn.commit()
 
+    def get_task_id_for_file_path(self, file_path: str) -> str | None:
+        """Возвращает task_id из artifacts_index по file_path (если файл был проиндексирован)."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT task_id FROM artifacts_index WHERE file_path = ? LIMIT 1;",
+                (file_path,),
+            )
+            row = cursor.fetchone()
+            return str(row[0]) if row and row[0] else None
+
     def find_artifact_path(self, artifact_id: str) -> str | None:
         """Возвращает путь к файлу артефакта из artifacts_file_sync по его ID (или None)."""
         with self.get_connection() as conn:
@@ -1128,8 +1058,11 @@ class AuditStorage:
         cursor: sqlite3.Cursor,
         task_id: str | None,
         pr_url: str | None,
-    ) -> tuple[Any, ...] | None:
-        """Поиск строки плана: сначала по task_id, затем (fallback) по pr_url."""
+    ) -> tuple[tuple[Any, ...] | None, bool]:
+        """Поиск строки плана: сначала по task_id, затем (fallback) по pr_url.
+
+        Возвращает (plan_row, is_ambiguous).
+        """
         plan_select = """
             SELECT artifact_id, task_id, category, status, title, pr_url, file_path,
                    steps_total, steps_done, current_step_title, payload_json
@@ -1138,20 +1071,26 @@ class AuditStorage:
         if task_id:
             cursor.execute(
                 plan_select + " WHERE task_id = ? AND artifact_type = 'plan' "
-                "ORDER BY mtime_ns DESC LIMIT 1;",
+                "ORDER BY mtime_ns DESC;",
                 (task_id,),
             )
-            plan_row = cursor.fetchone()
-            if plan_row:
-                return plan_row
+            rows = cursor.fetchall()
+            if len(rows) > 1:
+                return rows[0], True
+            if len(rows) == 1:
+                return rows[0], False
         if pr_url:
             cursor.execute(
                 plan_select + " WHERE pr_url = ? AND artifact_type = 'plan' "
-                "ORDER BY mtime_ns DESC LIMIT 1;",
+                "ORDER BY mtime_ns DESC;",
                 (pr_url,),
             )
-            return cursor.fetchone()
-        return None
+            rows = cursor.fetchall()
+            if len(rows) > 1:
+                return rows[0], True
+            if len(rows) == 1:
+                return rows[0], False
+        return None, False
 
     def get_task_context(
         self,
@@ -1167,7 +1106,7 @@ class AuditStorage:
             cursor = conn.cursor()
 
             # 1. Поиск плана
-            plan_row = self._find_plan_row(cursor, task_id, pr_url)
+            plan_row, is_ambiguous = self._find_plan_row(cursor, task_id, pr_url)
 
             # Вычисляем эффективный task_id и pr_url
             eff_task_id = task_id or (plan_row[1] if plan_row else None)
@@ -1216,17 +1155,33 @@ class AuditStorage:
             # Формируем структуру плана
             plan_data = None
             plan_status = "unknown"
+            plan_state_etag: str | None = None
             if plan_row:
                 plan_status = plan_row[3]
-                if view == "full" and plan_row[10]:
-                    plan_data = json.loads(plan_row[10])
+                if view == "full":
+                    if not is_ambiguous and plan_row[6]:
+                        file_path = Path(plan_row[6])
+                        if file_path.is_file():
+                            raw_bytes = file_path.read_bytes()
+                            plan_state_etag = hashlib.sha256(raw_bytes).hexdigest()
+                            with suppress(Exception):
+                                plan_data = parse_plan_markdown(
+                                    raw_bytes.decode("utf-8"), file_path=file_path
+                                ).model_dump()
+                    if plan_data is None and plan_row[10]:
+                        plan_data = json.loads(plan_row[10])
                 else:
+                    plan_ver = 1
+                    if plan_row[10]:
+                        with suppress(Exception):
+                            plan_ver = json.loads(plan_row[10]).get("plan_version", 1)
                     plan_data = {
                         "id": plan_row[0],
                         "task_id": plan_row[1],
                         "title": plan_row[4],
                         "category": plan_row[2],
                         "status": plan_row[3],
+                        "plan_version": plan_ver,
                         "pr_url": plan_row[5],
                         "file_path": plan_row[6],
                         "steps_total": plan_row[7],
@@ -1267,6 +1222,7 @@ class AuditStorage:
                 plan=plan_data,
                 reviews=reviews_data,
                 debts=debts_data,
+                plan_state_etag=plan_state_etag,
             )
 
     def search_artifacts(
@@ -1320,6 +1276,7 @@ class AuditStorage:
                 category=norm_cat,
                 status=debt_status,
                 limit=effective_limit,
+                include_sync_info=True,
             )
             for d in debt_candidates:
                 debt_results.append(
@@ -1331,9 +1288,10 @@ class AuditStorage:
                         "status": d.get("status", "planned"),
                         "title": d["title"],
                         "pr_url": None,
-                        "file_path": self.find_card_path(d["id"]),
+                        "file_path": d.get("file_path"),
                         "symptom": d.get("symptom"),
                         "target_file": d.get("target_file"),
+                        "_mtime_ns": d.get("mtime_ns", 0),
                     }
                 )
 
@@ -1341,9 +1299,10 @@ class AuditStorage:
             res = {k: v for k, v in item.items() if not k.startswith("_")}
             return res
 
-        # Наполнение mtime для долгов (file_sync хранит REAL mtime) — общая сортировка.
+        # Наполнение mtime для долгов (если ещё не заполнено) — общая сортировка.
         for item in debt_results:
-            item["_mtime_ns"] = self._card_mtime_ns(item["id"])
+            if "_mtime_ns" not in item:
+                item["_mtime_ns"] = self._card_mtime_ns(item["id"])
 
         if safe_q:
             # RRF: слияние рангов обоих источников до общего лимита

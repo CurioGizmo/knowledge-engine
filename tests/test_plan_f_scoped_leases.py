@@ -168,3 +168,43 @@ def test_release_scope_on_exception(tmp_path: Path) -> None:
     pool.get(d1)
     assert pool._pool[d1.resolve()].closed is False
     assert len(pool._pool) == 1
+
+
+def test_scoped_get_factory_failure_does_not_underflow_parallel_lease(tmp_path: Path) -> None:
+    """When bundle factory raises an exception, the scope must not register
+    the canonical root and release_scope must not decrement someone else's lease (aud-backend-b97b)."""
+    should_fail = False
+
+    def flaky_factory(root: Path) -> ClosableBundle:
+        if should_fail:
+            raise RuntimeError("Factory exploded")
+        return ClosableBundle(root)
+
+    pool: ProjectServicePool[ClosableBundle] = ProjectServicePool(flaky_factory, max_size=2)
+    d0 = tmp_path / "p0"
+    d0.mkdir()
+
+    # Scope 1 successfully acquires lease on d0
+    pool.start_scope()
+    b0 = pool.scoped_get(d0)
+    assert pool._leases == {d0.resolve(): 1}
+
+    # Scope 2 (nested or parallel) attempts to acquire when factory fails
+    should_fail = True
+    pool.start_scope()
+    try:
+        with pytest.raises(RuntimeError, match="Factory exploded"):
+            # d1 fails in factory
+            d1 = tmp_path / "p1"
+            d1.mkdir()
+            pool.scoped_get(d1)
+    finally:
+        pool.release_scope()
+
+    # Scope 1's lease on d0 MUST NOT have been decremented
+    assert pool._leases == {d0.resolve(): 1}
+    assert b0.closed is False
+
+    # Finally release scope 1
+    pool.release_scope()
+    assert pool._leases == {}

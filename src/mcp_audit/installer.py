@@ -22,6 +22,8 @@ AUDIT_TOOLS_LIST = [
     "record_plan",
     "update_plan",
     "step_plan",
+    "get_plan_versions",
+    "restore_plan_version",
     "record_review",
     "get_task_context",
     "search_artifacts",
@@ -33,7 +35,7 @@ AUDIT_INSTRUCTIONS = """# MCP Audit Engine (`audit-engine`)
 Operational tracker of development plans, code reviews and technical debt.
 The tools provide:
 - Receiving an aggregated task context (`get_task_context`) before starting work;
-- Maintaining step-by-step implementation plans (`record_plan`, `step_plan`, `update_plan`);
+- Maintaining step-by-step implementation plans and revision history (`record_plan`, `step_plan`, `update_plan`, `get_plan_versions`, `restore_plan_version`);
 - Recording code review results and rounds (`record_review`);
 - Search across plan, review and debt artifacts (`search_artifacts`);
 - Known debt checks and backlog management (`check_known_debt`, `get_ready_backlog`, `search_debt`, `record_debt`, `update_debt_status`);

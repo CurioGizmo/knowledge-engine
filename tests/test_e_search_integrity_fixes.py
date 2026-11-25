@@ -332,3 +332,27 @@ def test_skills_search_replaced_content_not_resurrected(tmp_path: Path) -> None:
     storage.index_skill(card, "dog_keyword body")
     res = storage.search_skills(query="cat_keyword")
     assert not any(c.name == "test-skill" for c in res)
+
+
+def test_skills_short_acronym_negative_no_substring_inside_words(tmp_path: Path) -> None:
+    """Short acronym query ('go', 'id', 'ai') must not match as substring inside words."""
+    storage = SkillsStorage(tmp_path / "skills.db")
+    card = SkillCard(
+        name="algorithm-guidelines",
+        title="Cargo Algorithm container",
+        description="Comprehensive guidelines for data structures and cargo algorithms",
+        category="general",
+    )
+    storage.index_skill(card, "Detailed implementation of container algorithms")
+
+    # 'go' inside algorithm/cargo must NOT match
+    res_go = storage.search_skills(query="go")
+    assert not any(c.name == "algorithm-guidelines" for c in res_go)
+
+    # 'id' inside guidelines must NOT match
+    res_id = storage.search_skills(query="id")
+    assert not any(c.name == "algorithm-guidelines" for c in res_id)
+
+    # 'ai' inside container must NOT match
+    res_ai = storage.search_skills(query="ai")
+    assert not any(c.name == "algorithm-guidelines" for c in res_ai)

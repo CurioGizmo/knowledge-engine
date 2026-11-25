@@ -39,15 +39,15 @@ when_to_use:
 # Тестовый сценарий
 
 ## Этап 1: Подготовка [id: stage_prep]
-<!-- meta: {"agent": null, "gate": null, "loop_max": 2} -->
+<!-- meta: {"agent": null, "validator": null, "loop_max": 2} -->
 Инструкция подготовки.
 
 ## Этап 2: Проверка агентом [id: stage_check]
-<!-- meta: {"agent": "tester-agent", "gate": null, "loop_max": 3} -->
+<!-- meta: {"agent": "tester-agent", "validator": null, "loop_max": 3} -->
 Инструкция проверки.
 
 ## Этап 3: Финальный артефакт [id: stage_artifact]
-<!-- meta: {"agent": null, "gate": null, "target_file": "report.md", "deliverable_must_exist": true, "require_human_confirm": true, "loop_max": 2} -->
+<!-- meta: {"agent": null, "validator": null, "target_file": "report.md", "deliverable_must_exist": true, "require_human_confirm": true, "loop_max": 2} -->
 Инструкция артефакта.
 """,
         encoding="utf-8",
@@ -380,9 +380,7 @@ def test_live_qa_flow_lifecycle(tmp_path: Path) -> None:
     from tests.conftest import get_companion_skills_dir
 
     _cat = get_companion_skills_dir()
-    catalog_dir = (
-        _cat if _cat is not None else (Path(__file__).resolve().parents[1].parent / "mcp_skills")
-    )
+    catalog_dir = _cat if _cat is not None else Path("/home/anton/projects/mcp_skills")
     if not (catalog_dir / "flows" / "live-qa-flow.md").exists():
         pytest.skip(f"Каталог {catalog_dir}/flows/live-qa-flow.md не найден")
 

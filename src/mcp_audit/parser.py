@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from datetime import datetime
@@ -37,10 +38,14 @@ from mcp_core.card_codec import (
 
 __all__ = [
     "append_steps_to_plan_markdown",
+    "compute_plan_definition_projection",
+    "compute_plan_definition_sha256",
     "mutate_plan_step_in_markdown",
     "parse_audit_markdown",
     "parse_plan_markdown",
     "parse_review_markdown",
+    "replace_goal_section_in_markdown",
+    "replace_steps_in_markdown",
     "serialize_audit_markdown",
     "serialize_plan_markdown",
     "serialize_review_markdown",
@@ -502,7 +507,10 @@ def serialize_plan_markdown(plan: PlanArtifact) -> str:
         "title": plan.title,
         "category": plan.category,
         "status": plan.status.value,
+        "plan_version": plan.plan_version,
     }
+    if plan.definition_sha256:
+        meta["definition_sha256"] = plan.definition_sha256
     if plan.pr_url:
         meta["pr_url"] = plan.pr_url
     if plan.target_files:
@@ -565,6 +573,179 @@ def serialize_plan_markdown(plan: PlanArtifact) -> str:
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _normalize_line_for_projection(
+    line: str,
+    title: str,
+) -> tuple[str | None, str]:
+    """Нормализует или фильтрует строку вне code fence для канонической проекции."""
+    s_line = line.strip()
+    if s_line == "---":
+        return None, title
+
+    # Сгенерированный заголовок # План
+    if re.match(r"^#[ ]+(?:План|Plan)(?::|\s|$)", line):
+        if not title:
+            m_title = re.match(r"^#[ ]+(?:План|Plan):\s*(?:\S+\s+)?(.*)$", line)
+            if m_title and m_title.group(1).strip():
+                title = m_title.group(1).strip()
+        return None, title
+
+    # Статус-бейдж
+    if re.match(r"^\s*>\s*(?:\*\*)?(?:Статус|Status)(?:\*\*)?:", line, re.IGNORECASE):
+        return None, title
+
+    # Pull Request строка
+    if re.match(r"^\s*>\s*(?:🔗\s*)?(?:\*\*)?Pull Request(?:\*\*)?:", line, re.IGNORECASE):
+        return None, title
+
+    # Задача строка
+    if re.match(r"^\s*>\s*(?:📌\s*)?(?:\*\*)?(?:Задача|Task)(?:\*\*)?:", line, re.IGNORECASE):
+        return None, title
+
+    # Заметки и даты шагов плана (> 📝 или > 🕒)
+    if re.match(r"^\s*>\s*[📝🕒]", line):
+        return None, title
+
+    # Чекбоксы шагов (- [ ] / - [x] / 1. [x] и т.д.)
+    m_box = re.match(r"^(\s*[-*]|\s*\d+\.)\s*\[([ xX])\](\s*.*)$", line)
+    if m_box:
+        prefix = m_box.group(1)
+        rest = m_box.group(3).strip()
+        norm_line = f"{prefix} {rest}".rstrip() if rest else prefix.rstrip()
+        return norm_line, title
+
+    return line.rstrip(), title
+
+
+def compute_plan_definition_projection(content_or_plan: str | PlanArtifact) -> str:
+    """Извлекает каноническую проекцию определения плана для вычисления SHA-256.
+
+    Сравнение и хеш строятся по канонической проекции определения:
+    - title
+    - target_files
+    - содержимое цели / details
+    - состав, названия и порядок шагов
+    - прочие пользовательские Markdown-секции (например ## Заметки архитектора)
+
+    ИЗ ПРОЕКЦИИ ИСКЛЮЧАЮТСЯ:
+    - сгенерированный заголовок # План
+    - badge > **Статус:** ...
+    - строка PR > 🔗 **Pull Request:** ...
+    - строка > 📌 **Задача:** ...
+    - разделители --- / служебные заголовки
+    - checkbox-отметки выполнения (- [ ] vs - [x]) вне code fence
+    - отметки дат и заметки step_plan (> 🕒 ... или > 📝 ... под шагом)
+
+    ВАЖНО: нормализатор учитывает fenced code blocks (```): текст - [x]
+    внутри fenced блока кода остаётся пользовательским содержимым.
+    """
+    if isinstance(content_or_plan, PlanArtifact):
+        content = serialize_plan_markdown(content_or_plan)
+    else:
+        content = str(content_or_plan)
+
+    match = FRONTMATTER_SPLIT_REGEX.match(content)
+    if match:
+        raw_yaml, body = match.group(1), match.group(2)
+        try:
+            meta = yaml.safe_load(raw_yaml) or {}
+        except Exception:
+            meta = {}
+    else:
+        body = content
+        meta = {}
+
+    title = str(meta.get("title") or "").strip()
+    raw_tf = meta.get("target_files") or []
+    if isinstance(raw_tf, str):
+        raw_tf = [raw_tf]
+    target_files = [str(f).strip() for f in raw_tf if str(f).strip()]
+
+    lines = body.splitlines()
+    active_fence: tuple[str, int] | None = None
+    processed_lines: list[str] = []
+
+    for line in lines:
+        is_fence, active_fence = core_md.check_fence_line(line, active_fence)
+        if is_fence or active_fence is not None:
+            processed_lines.append(line)
+            continue
+
+        norm_line, title = _normalize_line_for_projection(line, title)
+        if norm_line is not None:
+            processed_lines.append(norm_line)
+
+    normalized_body = re.sub(r"\n{3,}", "\n\n", "\n".join(processed_lines)).strip()
+    if target_files:
+        tf_lines = ["target_files:", *[f"  - {f}" for f in target_files]]
+    else:
+        tf_lines = ["target_files: []"]
+
+    projection_parts = [
+        f"title: {title}",
+        *tf_lines,
+        "---",
+        normalized_body,
+    ]
+    return "\n".join(projection_parts).strip()
+
+
+def compute_plan_definition_sha256(projection: str) -> str:
+    """Вычисляет SHA-256 хеш канонической проекции определения плана."""
+    return hashlib.sha256(projection.encode("utf-8")).hexdigest()
+
+
+def replace_goal_section_in_markdown(content: str, new_goal: str) -> str:
+    """Заменяет содержимое секции цели плана на new_goal, сохраняя структуру."""
+    lines = content.splitlines()
+    body_start = _find_body_start_line(lines)
+    active_fence: tuple[str, int] | None = None
+    h2_sections: list[tuple[int, str]] = []
+    h2_regex = re.compile(r"^[ ]{0,3}## (.*)$")
+
+    for i in range(body_start, len(lines)):
+        line = lines[i]
+        is_fence, active_fence = core_md.check_fence_line(line, active_fence)
+        if is_fence:
+            continue
+        if active_fence is None:
+            m = h2_regex.match(line)
+            if m:
+                h2_sections.append((i, m.group(1).strip()))
+
+    target_idx: int | None = None
+    for i, h_title in h2_sections:
+        h_lower = h_title.lower()
+        if any(k in h_lower for k in ("цель", "goal", "критери", "описан")):
+            target_idx = i
+            break
+
+    if target_idx is None:
+        steps_span = _select_steps_section(lines)
+        if steps_span:
+            insert_idx = steps_span[0]
+            new_lines = [
+                *lines[:insert_idx],
+                "## 🎯 Цель и критерии приёмки",
+                "",
+                new_goal.strip(),
+                "",
+                *lines[insert_idx:],
+            ]
+            return "\n".join(new_lines) + "\n"
+        return content.rstrip() + f"\n\n## 🎯 Цель и критерии приёмки\n{new_goal.strip()}\n"
+
+    next_h2_idx = next((i for i, _ in h2_sections if i > target_idx), len(lines))
+    new_lines = [
+        *lines[: target_idx + 1],
+        "",
+        new_goal.strip(),
+        "",
+        *lines[next_h2_idx:],
+    ]
+    return "\n".join(new_lines) + "\n"
 
 
 def _section_has_checkbox(lines: list[str], start_idx: int, end_idx: int) -> bool:
@@ -793,6 +974,20 @@ def parse_plan_markdown(content: str, file_path: Path | None = None) -> PlanArti
         msg = f"PLAN_FILE_CORRUPTED: schema_version должен быть целым числом: {raw_sv}"
         raise ValueError(msg) from err
 
+    raw_pv = meta.get("plan_version")
+    if raw_pv is None:
+        plan_version = 1
+    else:
+        try:
+            plan_version = int(raw_pv)
+        except (ValueError, TypeError) as err:
+            msg = f"PLAN_FILE_CORRUPTED: plan_version должен быть целым числом: {raw_pv}"
+            raise ValueError(msg) from err
+
+    definition_sha256 = meta.get("definition_sha256")
+    if definition_sha256 is not None:
+        definition_sha256 = str(definition_sha256)
+
     return PlanArtifact(
         id=plan_id,
         schema_version=schema_version,
@@ -800,6 +995,8 @@ def parse_plan_markdown(content: str, file_path: Path | None = None) -> PlanArti
         title=title,
         category=category,
         status=status,
+        plan_version=plan_version,
+        definition_sha256=definition_sha256,
         pr_url=meta.get("pr_url"),
         target_files=[str(f) for f in target_files],
         related_debts=[str(d) for d in related_debts],
@@ -992,6 +1189,36 @@ def append_steps_to_plan_markdown(
             lines.extend(["", "## 📋 Этапы и шаги", *added_lines])
 
     return "\n".join(lines)
+
+
+def replace_steps_in_markdown(
+    content: str,
+    new_steps: list[str],
+) -> str:
+    """Заменяет всю секцию шагов плана на new_steps, сохраняя структуру остальных секций."""
+    lines = content.splitlines()
+    steps_span = _select_steps_section(lines)
+
+    formatted_lines: list[str] = []
+    for i, s_text in enumerate(new_steps, 1):
+        clean_text = s_text.strip()
+        if clean_text.startswith(("- [ ]", "- [x]", "- [X]", "* [ ]", "* [x]", "* [X]")):
+            for subline in clean_text.splitlines():
+                formatted_lines.append(subline)
+        else:
+            clean_title = re.sub(r"^\d+\.\s*", "", clean_text).strip() or clean_text
+            formatted_lines.append(f"- [ ] {i}. {clean_title}")
+
+    if steps_span:
+        start_idx, end_idx = steps_span
+        new_lines = [
+            *lines[: start_idx + 1],
+            *formatted_lines,
+            *lines[end_idx:],
+        ]
+        return "\n".join(new_lines) + "\n"
+
+    return content.rstrip() + "\n\n## 📋 Этапы и шаги\n" + "\n".join(formatted_lines) + "\n"
 
 
 # ---------------------------------------------------------------------------

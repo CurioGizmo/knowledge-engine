@@ -23,10 +23,10 @@ when_to_use:
 Когда все требования ясны — вызови `step_flow(action="advance", deliverable="Анализ завершен, требования согласованы", notes="Анализ спецификации завершён; требования согласованы с пользователем")`.
 
 ## 2. Проектирование плана [id: plan_draft]
-<!-- meta: {"gate": "validate_plan", "target_file": "implementation_plan.md", "deliverable_must_exist": true} -->
+<!-- meta: {"validator": "validate_plan", "target_file": "implementation_plan.md", "deliverable_must_exist": true} -->
 Составь или обнови `implementation_plan.md` по стандартам платформы.
 Убедись, что план содержит User Review Required, Open Questions, Proposed Changes и Verification Plan.
-После завершения плана вызови `step_flow(action="advance", deliverable="implementation_plan.md")`. Шлюз автоматически проверит наличие и непустоту файла плана.
+После завершения плана вызови `step_flow(action="advance", deliverable="implementation_plan.md")`. Валидатор автоматически проверит наличие и непустоту файла плана.
 
 ## 3. Цикл ревью плана [id: plan_review_loop]
 <!-- meta: {"agent": "plan-reviewer", "loop_max": 3} -->

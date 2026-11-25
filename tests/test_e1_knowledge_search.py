@@ -110,24 +110,24 @@ def test_unicode61_word_boundary_does_not_match_substring(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_llm_stop_words_defined() -> None:
-    """Набор стоп-слов LLM содержит характерные вводные и служебные слова."""
-    for word in ("как", "мне", "нужно", "пожалуйста", "подскажи", "что", "делать"):
-        assert word in LLM_QUERY_STOP_WORDS
+def test_llm_stop_words_empty_or_frozenset() -> None:
+    """Стоп-слова упразднены в пользу BM25 и длины токенов; frozenset пуст."""
+    assert isinstance(LLM_QUERY_STOP_WORDS, frozenset)
+    assert len(LLM_QUERY_STOP_WORDS) == 0
 
 
-def test_sanitizer_cleans_llm_stop_words() -> None:
-    """Санитайзер удаляет разговорные стоп-слова LLM, сохраняя смысловые термины."""
-    cleaned = sanitize_fts_query("подскажи пожалуйста как исправить sqlite дедлок")
-    assert "подскажи" not in cleaned
-    assert "пожалуйста" not in cleaned
-    assert "как" not in cleaned
+def test_sanitizer_filters_short_tokens_and_preserves_terms() -> None:
+    """Санитайзер отсекает короткие предлоги (< 3 символов), сохраняя смысловые термины."""
+    cleaned = sanitize_fts_query("в на по to in on sqlite дедлок")
     assert "sqlite" in cleaned
     assert "дедлок" in cleaned
+    assert "в*" not in cleaned
+    assert "на*" not in cleaned
+    assert "to*" not in cleaned
 
 
-def test_sanitizer_preserves_query_when_all_are_stop_words() -> None:
-    """Если запрос состоит только из стоп-слов, санитайзер не вырождается в пустую строку."""
+def test_sanitizer_preserves_query_when_conversational() -> None:
+    """Разговорный запрос формирует валидное FTS-выражение без вырождения в пустую строку."""
     cleaned = sanitize_fts_query("что делать")
     assert cleaned and cleaned != '""'
     assert "что" in cleaned or "делать" in cleaned

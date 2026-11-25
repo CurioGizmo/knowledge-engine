@@ -25,7 +25,8 @@ from pathlib import Path
 import pytest
 
 from mcp_skills.errors import InvalidFlowFormatError
-from mcp_skills.flow_engine import FlowEngine, step_flow, validate_plan_gate
+from mcp_skills.flow_engine import FlowEngine, step_flow
+from mcp_skills.validators import validate_plan as validate_plan_gate
 from mcp_skills.flow_parser import merge_flow_override, parse_flow_markdown
 from mcp_skills.flow_storage import FlowStorage
 from mcp_skills.errors import AssemblyBudgetExceededError
@@ -346,6 +347,44 @@ def test_f2_plan_string_path_missing_fails_clearly(tmp_path: Path) -> None:
     )
     assert res.passed is False
     assert any("docs/plans/missing.md" in b and "не найден" in b for b in res.blockers)
+
+
+def test_f2_plan_absolute_and_outside_paths(tmp_path: Path) -> None:
+    """Абсолютные и внешние пути валидируются корректно (aud-skills-9e3f)."""
+    stage = FlowStage(id="s1", title="Draft", instruction="Plan")
+    session = _make_gate_session(tmp_path)
+
+    # 1. Несуществующий абсолютный путь -> passed=False с блокером
+    res_nonexistent = validate_plan_gate(
+        session,
+        stage,
+        deliverable="/nonexistent/plan.md",
+        project_root=tmp_path,
+    )
+    assert res_nonexistent.passed is False
+    assert any("/nonexistent/plan.md" in b for b in res_nonexistent.blockers)
+
+    # 2. Путь вне project_root (/etc/passwd) -> passed=False с блокером
+    res_outside = validate_plan_gate(
+        session,
+        stage,
+        deliverable="/etc/passwd",
+        project_root=tmp_path,
+    )
+    assert res_outside.passed is False
+    assert any("/etc/passwd" in b for b in res_outside.blockers)
+
+    # 3. Валидный абсолютный путь внутри project_root -> passed=True
+    valid_file = tmp_path / "valid_plan.md"
+    valid_file.write_text("# Реальный план\nШаг 1", encoding="utf-8")
+    res_valid = validate_plan_gate(
+        session,
+        stage,
+        deliverable=str(valid_file),
+        project_root=tmp_path,
+    )
+    assert res_valid.passed is True
+    assert res_valid.blockers == []
 
 
 def test_f2_plan_text_still_works(tmp_path: Path) -> None:

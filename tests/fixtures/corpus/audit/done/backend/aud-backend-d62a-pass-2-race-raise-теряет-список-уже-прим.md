@@ -6,13 +6,13 @@ category: backend
 priority: important
 autonomy: high
 complexity: M
-status: planned
+status: completed
 target_file: src/mcp_knowledge/use_cases/resolve_hypotheses.py
 symbol: ResolveHypothesesUseCase.execute
 created_at: '2026-11-09'
-updated_at: '2026-11-09'
+updated_at: '2026-11-24'
+pr_url: https://github.com/Ariadne-Tech/mcp-knowledge-engine/commit/086fde9
 ---
-
 # aud-backend-d62a: Pass 2 race-raise теряет список уже применённых резолюций батча — частичная запись без отчёта
 
 ## ❌ Симптом
@@ -23,3 +23,6 @@ updated_at: '2026-11-09'
 
 ## 🛠 Предлагаемое решение
 Минимально: включить в сообщение ValueError список уже применённых ID резолюций (детали доступны в details на момент исключения), либо задокументировать в docstring execute «best-effort при конкурентной гонке: уже применённые резолюции не откатываются». Макcимально: собрать ValueError с полем applied_ids и прокинуть через error-envelope.
+
+## ✅ Фактическое решение (Actual resolution)
+- 2026-11-24: Решено в коммите 086fde9: Pass 2 обёрнут в try...finally с гарантированным sync(), при частичном сбое батча возвращается partial_failure со списком уже сохранённых details.

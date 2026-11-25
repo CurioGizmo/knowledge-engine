@@ -10,6 +10,7 @@ from mcp_skills.errors import (
     AmbiguousSessionError,
     FlowNotFoundError,
     SessionConflictError,
+    SessionNotFoundError,
     StageMismatchError,
 )
 from mcp_skills.flow_engine import FlowEngine, step_flow
@@ -351,6 +352,55 @@ async def test_mcp_step_flow_envelope_errors(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_step_flow_session_not_found_vs_flow_not_found(tmp_path: Path) -> None:
+    """Проверяет возврат SESSION_NOT_FOUND (вместо FLOW_NOT_FOUND) для abort/retry/status без сессии."""
+    server = create_server(project_root=tmp_path)
+
+    # 1. abort без сессии -> SESSION_NOT_FOUND
+    abort_res = await server.call_tool("step_flow", {"action": "abort"})
+    abort_data = abort_res.structured_content or json.loads(abort_res.content[0].text)
+    assert abort_data.get("error") is True
+    assert abort_data.get("reason") == "SESSION_NOT_FOUND"
+    assert abort_data.get("error_type") == "SessionNotFoundError"
+
+    # 2. retry без сессии -> SESSION_NOT_FOUND
+    retry_res = await server.call_tool("step_flow", {"action": "retry"})
+    retry_data = retry_res.structured_content or json.loads(retry_res.content[0].text)
+    assert retry_data.get("error") is True
+    assert retry_data.get("reason") == "SESSION_NOT_FOUND"
+    assert retry_data.get("error_type") == "SessionNotFoundError"
+
+    # 3. abort с явным несуществующим session_id -> SESSION_NOT_FOUND
+    abort_explicit_res = await server.call_tool(
+        "step_flow", {"action": "abort", "session_id": "flow-nonexistent-123"}
+    )
+    abort_explicit_data = abort_explicit_res.structured_content or json.loads(
+        abort_explicit_res.content[0].text
+    )
+    assert abort_explicit_data.get("error") is True
+    assert abort_explicit_data.get("reason") == "SESSION_NOT_FOUND"
+    assert abort_explicit_data.get("error_type") == "SessionNotFoundError"
+
+    # 3b. status с явным несуществующим session_id -> SESSION_NOT_FOUND
+    status_explicit_res = await server.call_tool(
+        "step_flow", {"action": "status", "session_id": "flow-nonexistent-123"}
+    )
+    status_explicit_data = status_explicit_res.structured_content or json.loads(
+        status_explicit_res.content[0].text
+    )
+    assert status_explicit_data.get("error") is True
+    assert status_explicit_data.get("reason") == "SESSION_NOT_FOUND"
+    assert status_explicit_data.get("error_type") == "SessionNotFoundError"
+
+    # 4. Несуществующий flow -> FLOW_NOT_FOUND
+    flow_res = await server.call_tool("step_flow", {"flow": "nonexistent-flow-scenario"})
+    flow_data = flow_res.structured_content or json.loads(flow_res.content[0].text)
+    assert flow_data.get("error") is True
+    assert flow_data.get("reason") == "FLOW_NOT_FOUND"
+    assert flow_data.get("error_type") == "FlowNotFoundError"
+
+
+@pytest.mark.asyncio
 async def test_mcp_step_flow_forwards_options_and_transition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -638,3 +688,59 @@ Inspect
     _, scored_multi = _score_flows(mock_flows, "проверка безопасности изоляции")
     # Должен быть ровно 5 (флаг when_matched=True сработал один раз), а не 15
     assert scored_multi[0][0] == 5
+
+
+def test_step_flow_rejects_unknown_action(tmp_path: Path) -> None:
+    """Неизвестный action должен падать с ValueError, а не проваливаться в advance."""
+    from mcp_skills.flow_engine import step_flow
+
+    with pytest.raises(ValueError, match="Неизвестное действие"):
+        step_flow(action="unknown_typo", flow="sample-flow", project_root=tmp_path)  # type: ignore[arg-type]
+
+
+def test_step_flow_preserves_previous_iteration_in_history(tmp_path: Path) -> None:
+    """При переходе на следующий этап в истории фиксируется iteration до сброса."""
+    from mcp_skills.flow_engine import step_flow
+    from mcp_skills.flow_storage import FlowStorage
+
+    flows_dir = tmp_path / ".agents" / "flows"
+    flows_dir.mkdir(parents=True, exist_ok=True)
+    (flows_dir / "iter-flow.md").write_text(
+        """---
+title: Iteration Test Flow
+description: Check history iteration preservation
+---
+## Stage 1 [id: stage_one]
+<!-- meta: {"agent": null, "loop_max": 3} -->
+Stage one
+
+## Stage 2 [id: stage_two]
+<!-- meta: {"agent": "coder-agent", "loop_max": 3} -->
+Stage two
+
+## Stage 3 [id: stage_three]
+<!-- meta: {"agent": null, "loop_max": 2} -->
+Stage three
+""",
+        encoding="utf-8",
+    )
+
+    started = step_flow(action="advance", flow="iter-flow", project_root=tmp_path)
+    sid = started["session_id"]
+    # Авто-этап: needs_work -> iteration 2, затем advance -> в истории iteration == 2
+    step_flow(
+        action="advance", session_id=sid, verdict="needs_work", notes="fix1", project_root=tmp_path
+    )
+    step_flow(action="advance", session_id=sid, verdict="approved", project_root=tmp_path)
+
+    # Агентный этап: needs_work -> iteration 2, затем approved -> в истории iteration == 2
+    step_flow(
+        action="advance", session_id=sid, verdict="needs_work", notes="fix2", project_root=tmp_path
+    )
+    step_flow(action="advance", session_id=sid, verdict="approved", project_root=tmp_path)
+
+    history = FlowStorage(project_root=tmp_path).get_history(sid)
+    auto_adv = [h for h in history if h["event"] == "advance_auto"]
+    rev_app = [h for h in history if h["event"] == "review_approved"]
+    assert auto_adv and auto_adv[-1]["iteration"] == 2
+    assert rev_app and rev_app[-1]["iteration"] == 2

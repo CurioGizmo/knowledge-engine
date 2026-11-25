@@ -6,13 +6,13 @@ category: backend
 priority: suggestion
 autonomy: high
 complexity: M
-status: planned
+status: completed
 target_file: src/mcp_knowledge/storage.py
 symbol: _tokens_morpho_equal
 created_at: '2026-11-09'
-updated_at: '2026-11-09'
+updated_at: '2026-11-24'
+pr_url: https://github.com/Ariadne-Tech/mcp-knowledge-engine/commit/d5e0fad
 ---
-
 # aud-backend-eae3: Префикс-эвристика _tokens_morpho_equal: ложный duplicate (table/tablet) и ложный distinct (цикле/циклах, кэша/кэшей)
 
 ## ❌ Симптом
@@ -23,3 +23,6 @@ _tokens_morpho_equal (src/mcp_knowledge/storage.py:422) использует 5-�
 
 ## 🛠 Предлагаемое решение
 Заменить префикс-эвристику стеммингом: подключить уже существующий stem_russian из mcp_core.sanitizer (используется в FTS-индексации skills) для свёртки русских форм перед сравнением; для латиницы — простой суффикс-стеммер или минимальная длина различия (например, относительное расстояние Левенштейна < 0.3 при общем префиксе). Регресс-тесты: table/tablet → не эквивалентны; цикле/циклах, кэша/кэшей → эквивалентны.
+
+## ✅ Фактическое решение (Actual resolution)
+- 2026-11-24: Решено в коммитах d6436b0 и d5e0fad: 5-символьная эвристика заменена на гибридный алгоритм со стеммингом (stem_russian с 4-5 буквами) и белыми списками флексий _RU_FLEXION_SUFFIXES / _EN_FLEXION_SUFFIXES.

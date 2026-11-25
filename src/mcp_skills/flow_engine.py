@@ -1,65 +1,77 @@
-"""Исполнительный движок пайплайна воркфлоу (Workflow State Machine) и реестр шлюзов качества."""
+"""Исполнительный движок пайплайна воркфлоу (Workflow State Machine) и реестр валидаторов."""
 
 from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from mcp_core.paths import (
     _find_default_project_root,
-    get_cache_dir,
-    resolve_skills_repo_dir,
     safe_read_text,
 )
 from mcp_skills.adapters import SUPPORTED_TARGETS
-from mcp_skills.bundler import AgentBundler, merge_profile_with_override
+from mcp_skills.bundler import AgentBundler
 from mcp_skills.errors import (
     AmbiguousSessionError,
-    AssemblyBudgetExceededError,
     FlowError,
-    FlowNotFoundError,
     GateValidationError,
     InvalidFlowFormatError,
     SessionConflictError,
-    SkillNotFoundError,
+    SessionNotFoundError,
     StageMismatchError,
 )
 from mcp_skills.flow_parser import list_available_flows, load_flow_definition
 from mcp_skills.flow_storage import FlowStorage
 from mcp_skills.git_manager import get_current_branch
 from mcp_skills.models import (
-    AgentProfile,
     FlowDefinition,
     FlowSession,
     FlowStage,
     FlowStatus,
     FlowVerdict,
 )
-from mcp_skills.resources import (
-    determine_resource_type,
-    is_resource_associated_with_skill,
-    resolve_link_to_resource_id,
+from mcp_skills.orchestration_state import (
+    init_orchestration_state,
+    is_orchestration_flow,
+    summarize_orchestration_state,
+    sync_orchestration_file,
+    update_orchestration_state,
 )
-from mcp_skills.slot_compiler import SlotCompiler
 from mcp_skills.spam_gate import is_safe_name
-from mcp_skills.stack_detector import detect_canonical_project_name
+from mcp_skills.stage_compiler import (
+    _build_stage_payload,
+    _bundle_stage_agent,
+    _compile_stage_skills,
+    _completed_response,
+    _compute_escalate_next_call,
+    _compute_stage_next_call,
+    _compute_stage_required_inputs,
+    _extract_stage_resources,
+)
 from mcp_skills.storage import SkillsStorage
-from mcp_skills.synchronizer import SkillsSynchronizer
-from mcp_skills.token_guard import TokenGuard
+from mcp_skills.validators import (
+    VALIDATOR_REGISTRY,
+    ValidationResult,
+    _looks_like_path,
+    validate_plan,
+    validate_qa_report,
+    validate_review,
+)
 
 logger = logging.getLogger("mcp_skills.flow_engine")
 
 __all__ = [
-    "GATE_REGISTRY",
+    "VALIDATOR_REGISTRY",
     "FlowEngine",
-    "GateResult",
+    "ValidationResult",
+    "_build_stage_payload",
+    "_bundle_stage_agent",
+    "_compile_stage_skills",
+    "_extract_stage_resources",
     "abort_flow",
     "advance_flow",
     "get_flow_status",
@@ -67,7 +79,9 @@ __all__ = [
     "resolve_flow_escalation",
     "start_flow",
     "step_flow",
-    "validate_plan_gate",
+    "validate_plan",
+    "validate_qa_report",
+    "validate_review",
 ]
 
 MAX_DELIVERABLE_BYTES = 64 * 1024  # 64 KB
@@ -188,59 +202,71 @@ def _validate_target(target: str | None) -> str:
     return t
 
 
-def _compute_stage_required_inputs(stage: FlowStage) -> list[str]:
-    """Вычисляет список обязательных входных данных для перехода с текущего этапа."""
-    inputs: list[str] = []
-    if stage.meta.deliverable_must_exist or stage.meta.target_file:
-        inputs.append("deliverable")
-    if stage.meta.require_verdict or stage.meta.agent:
-        inputs.append("verdict")
-    if stage.meta.require_human_confirm:
-        inputs.append("human_confirmed")
-    if stage.meta.transition_required:
-        inputs.append("transition")
-    return inputs
-
-
-def _compute_stage_next_call(
+def _maybe_update_orchestration(
     session: FlowSession,
-    stage: FlowStage,
-    root: Path | str,
-    target: str = "antigravity",
-) -> dict[str, Any]:
-    """Формирует шаблон следующего вызова step_flow для активного этапа."""
-    args: dict[str, Any] = {
-        "action": "advance",
-        "project_path": str(root),
+    flow_def: FlowDefinition | None,
+    root: Path,
+    *,
+    stage_id: str,
+    stage_validator: str | None = None,
+    stage_iteration: int | None = None,
+    deliverable: Any = None,
+    verdict: str | None = None,
+    notes: str = "",
+    final_status_override: str | None = None,
+) -> str | None:
+    """Обновляет context_data['orchestration'] до _build_stage_payload и update_session."""
+    has_orch = isinstance(session.context_data, dict) and isinstance(
+        session.context_data.get("orchestration"), dict
+    )
+    if not has_orch and (flow_def is None or not is_orchestration_flow(flow_def)):
+        return None
+    effective_def = flow_def or FlowDefinition(name=session.flow_name, title=session.flow_name)
+    _, renamed_from = update_orchestration_state(
+        session,
+        effective_def,
+        root,
+        stage_id=stage_id,
+        stage_validator=stage_validator,
+        stage_iteration=stage_iteration,
+        deliverable=deliverable,
+        verdict=verdict,
+        notes=notes,
+        final_status_override=final_status_override,
+    )
+    return renamed_from
+
+
+def _aborted_response(session: FlowSession, message: str) -> dict[str, Any]:
+    res: dict[str, Any] = {
+        "status": FlowStatus.ABORTED.value,
         "session_id": session.id,
-        "expected_stage_id": stage.id,
-        # Эффективный target указывается всегда, включая antigravity (шаг 5):
-        # явный antigravity не превращается в None/отсутствующий ключ.
-        "target": target,
+        "flow_name": session.flow_name,
+        "message": message,
+        "required_inputs": [],
+        "next_call": None,
     }
-    return {
-        "tool": "step_flow",
-        "arguments": args,
-    }
+    orch_summary = (
+        summarize_orchestration_state(session.context_data.get("orchestration"))
+        if isinstance(session.context_data, dict)
+        else None
+    )
+    if orch_summary is not None:
+        res["orchestration_state"] = orch_summary
+    return res
 
 
-def _compute_escalate_next_call(
+def _sync_orchestration_after_commit(
+    root: Path,
     session: FlowSession,
-    root: Path | str,
-    target: str = "antigravity",
-) -> dict[str, Any]:
-    """Формирует вызов разрешения эскалации для заблокированной Circuit Breaker сессии."""
-    args: dict[str, Any] = {
-        "action": "escalation_resolve",
-        "project_path": str(root),
-        "session_id": session.id,
-        # Эффективный target указывается всегда, включая antigravity (шаг 5).
-        "target": target,
-    }
-    return {
-        "tool": "step_flow",
-        "arguments": args,
-    }
+    renamed_from: str | None = None,
+) -> None:
+    """Материализует orchestration-state.md на диск строго после коммита в SQLite."""
+    if not isinstance(session.context_data, dict):
+        return
+    orch = session.context_data.get("orchestration")
+    if isinstance(orch, dict):
+        sync_orchestration_file(root, orch, previous_path=renamed_from)
 
 
 def _apply_needs_work(
@@ -252,6 +278,8 @@ def _apply_needs_work(
     notes_default: str,
     root: Path | None = None,
     target: str = "antigravity",
+    flow_def: FlowDefinition | None = None,
+    deliverable: Any = None,
 ) -> dict[str, Any]:
     """Фиксирует вердикт needs_work: этап удерживается, итерация +1, Circuit Breaker.
 
@@ -260,9 +288,22 @@ def _apply_needs_work(
     иначе — активна и ждёт доработки на том же этапе.
     """
     effective_root = root if root is not None else Path(session.project_root)
+    evaluated_iteration = session.iteration_count
     session.iteration_count += 1
     if session.iteration_count > current_stage.meta.loop_max:
         session.status = FlowStatus.BLOCKED_ESCALATE
+        renamed_from = _maybe_update_orchestration(
+            session,
+            flow_def,
+            effective_root,
+            stage_id=current_stage.id,
+            stage_validator=current_stage.meta.validator,
+            stage_iteration=evaluated_iteration,
+            deliverable=deliverable,
+            verdict=FlowVerdict.NEEDS_WORK.value,
+            notes=notes,
+            final_status_override="BLOCKED",
+        )
         storage.update_session(
             session,
             history_events=[
@@ -274,7 +315,8 @@ def _apply_needs_work(
                 }
             ],
         )
-        return {
+        _sync_orchestration_after_commit(effective_root, session, renamed_from)
+        res = {
             "status": FlowStatus.BLOCKED_ESCALATE.value,
             "session_id": session.id,
             "stage_id": current_stage.id,
@@ -282,13 +324,28 @@ def _apply_needs_work(
             "loop_max": current_stage.meta.loop_max,
             "directive": (
                 "Достигнут лимит итераций ревью. Сформулируй вопрос пользователю "
-                "для разрешения разногласий и вызови resolve_flow_escalation после получения ответа."
+                "для разрешения разногласий и вызови step_flow(action='escalation_resolve', resolution=...) после получения ответа."
             ),
             "notes": notes,
             "required_inputs": ["resolution"],
             "next_call": _compute_escalate_next_call(session, effective_root, target=target),
         }
+        orch_summary = summarize_orchestration_state(session.context_data.get("orchestration"))
+        if orch_summary is not None:
+            res["orchestration_state"] = orch_summary
+        return res
 
+    renamed_from = _maybe_update_orchestration(
+        session,
+        flow_def,
+        effective_root,
+        stage_id=current_stage.id,
+        stage_validator=current_stage.meta.validator,
+        stage_iteration=evaluated_iteration,
+        deliverable=deliverable,
+        verdict=FlowVerdict.NEEDS_WORK.value,
+        notes=notes or notes_default,
+    )
     storage.update_session(
         session,
         history_events=[
@@ -301,7 +358,8 @@ def _apply_needs_work(
             }
         ],
     )
-    return {
+    _sync_orchestration_after_commit(effective_root, session, renamed_from)
+    res = {
         "status": FlowStatus.ACTIVE.value,
         "session_id": session.id,
         "stage_id": current_stage.id,
@@ -315,1057 +373,9 @@ def _apply_needs_work(
             session, current_stage, effective_root, target=target
         ),
     }
-
-
-@dataclass
-class GateResult:
-    """Результат валидации шлюза качества (Quality Gate)."""
-
-    passed: bool
-    blockers: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-
-
-def _looks_like_path(s: str) -> bool:
-    """Эвристика «строка-путь» для deliverable/плана (F2, verdict_6 T1).
-
-    Относительный путь с расширением файла и разделителями каталогов
-    ('docs/plans/x.md') — путь; многострочный текст плана или обычная
-    фраза без расширения — текст. Абсолютные пути не считаются путями
-    относительно project_root (safe_read_text их блокирует и вернёт None
-    при выходе за корень — это уже обрабатывается как «файл не найден»).
-    """
-    s = s.strip()
-    if not s or "\n" in s:
-        return False
-    if s.startswith(("/", "~")):
-        return False
-    if "/" in s or "\\" in s:
-        return True
-    return Path(s).suffix in {".md", ".markdown", ".txt", ".rst", ".yaml", ".yml", ".json"}
-
-
-def _plan_deliverable_source(deliverable: Any) -> tuple[str | None, str | None]:
-    """Разбирает deliverable на (текст плана, путь к файлу) — F2.
-
-    Возвращает первый применимый источник: текст (``content`` или строка
-    без маркеров пути) либо путь (``file_path`` или строка-путь).
-    ``content`` приоритетнее ``file_path``.
-    """
-    if isinstance(deliverable, dict):
-        content = deliverable.get("content")
-        if isinstance(content, str):
-            return content, None
-        file_path = deliverable.get("file_path")
-        if isinstance(file_path, str):
-            return None, file_path
-        return None, None
-    if isinstance(deliverable, str):
-        stripped = deliverable.strip()
-        if _looks_like_path(stripped):
-            return None, stripped
-        return (stripped or None), None
-    return None, None
-
-
-def validate_plan_gate(
-    session: FlowSession,
-    stage: FlowStage,
-    deliverable: Any,
-    project_root: Path,
-    storage: SkillsStorage | None = None,
-) -> GateResult:
-    """Шлюз проверки наличия плана реализации (validate_plan).
-
-    F2 — однозначные типы артефакта (verdict_6 П.8):
-    - ``deliverable``-строка, похожая на путь, — ПУТЬ: файл читается,
-      отсутствие файла — блокер с явной причиной (раньше несуществующий
-      путь молча принимался как «текст плана»);
-    - ``deliverable={'content': str}`` — ТЕКСТ плана (приоритетнее file_path);
-    - ``deliverable={'file_path': str}`` — путь;
-    - ``stage.meta.target_file``: валидный файл-артефакт из deliverable
-      снимает требование к целевому файлу (T4 — target_file больше не
-      глушит корректный file_path), но текст плана — не снимает:
-      объявленный target_file обязан существовать и не быть пустым.
-    """
-    blockers: list[str] = []
-    plan_text: str | None = None
-    artifact_file_found = False
-
-    def _read_file(rel: str, label: str, *, is_target: bool = False) -> None:
-        nonlocal plan_text, artifact_file_found
-        try:
-            text = safe_read_text(project_root, rel)
-        except ValueError as err:
-            raise GateValidationError(f"Ошибка безопасности пути плана: {err}") from err
-        if text is None:
-            if is_target:
-                blockers.append(f"Целевой файл плана '{rel}' не найден в проекте")
-            else:
-                blockers.append(f"Файл плана '{rel}' не найден в проекте ({label})")
-            return
-        if not text.strip():
-            if is_target:
-                blockers.append(f"Целевой файл плана '{rel}' пуст")
-            else:
-                blockers.append(f"Файл плана '{rel}' пуст")
-            return
-        if plan_text is None:
-            plan_text = text
-        artifact_file_found = True
-
-    # 1. deliverable — первый применимый источник (текст или путь)
-    text_src, path_src = _plan_deliverable_source(deliverable)
-    if text_src is not None:
-        plan_text = text_src
-    elif path_src is not None:
-        _read_file(path_src, "deliverable")
-
-    # 2. target_file: валидный файл-артефакт спасает ненайденный целевой
-    # файл (T4); текст плана — нет, объявленный target_file проверяется.
-    if stage.meta.target_file and not artifact_file_found:
-        _read_file(stage.meta.target_file, "target_file", is_target=True)
-
-    if plan_text is not None and not plan_text.strip():
-        return GateResult(passed=False, blockers=["План реализации не предоставлен или пуст"])
-
-    if blockers:
-        return GateResult(passed=False, blockers=blockers)
-
-    if plan_text is None:
-        return GateResult(passed=False, blockers=["План реализации не предоставлен или пуст"])
-
-    return GateResult(passed=True, blockers=[], warnings=[])
-
-
-def _extract_qa_report_text(
-    deliverable: Any,
-    target_file: str | None,
-    project_root: Path,
-) -> tuple[str | None, list[str]]:
-    """Извлекает текст отчёта из deliverable или target_file."""
-    blockers: list[str] = []
-    report_text: str | None = None
-
-    def _read_file(rel: str, label: str) -> None:
-        nonlocal report_text
-        try:
-            text = safe_read_text(project_root, rel)
-        except ValueError as err:
-            raise GateValidationError(f"Ошибка безопасности пути отчёта: {err}") from err
-        if text is None:
-            blockers.append(f"Файл отчёта приёмки '{rel}' не найден в проекте ({label})")
-            return
-        if not text.strip():
-            blockers.append(f"Файл отчёта приёмки '{rel}' пуст ({label})")
-            return
-        if report_text is None:
-            report_text = text
-
-    if isinstance(deliverable, dict):
-        if deliverable.get("content"):
-            report_text = str(deliverable["content"])
-        elif deliverable.get("file_path"):
-            _read_file(str(deliverable["file_path"]), "deliverable.file_path")
-    elif isinstance(deliverable, str) and deliverable.strip():
-        stripped = deliverable.strip()
-        if _looks_like_path(stripped):
-            _read_file(stripped, "deliverable")
-        else:
-            report_text = stripped
-
-    if report_text is None and target_file:
-        _read_file(target_file, "target_file")
-
-    return report_text, blockers
-
-
-def _parse_qa_report_table(
-    report_text: str,
-) -> tuple[list[list[str]], dict[str, int]]:
-    """Парсит markdown-таблицу проверок и определяет индексы колонок."""
-    lines = report_text.splitlines()
-    table_rows: list[list[str]] = []
-    header_indices: dict[str, int] = {}
-    in_table = False
-
-    for line in lines:
-        s = line.strip()
-        if s.startswith("|") and s.endswith("|"):
-            cells = [c.strip() for c in s[1:-1].split("|")]
-            if all(re.match(r"^:?-+:?$", c) for c in cells):
-                in_table = True
-                continue
-            if not in_table:
-                for idx, cell in enumerate(cells):
-                    cl = cell.lower()
-                    # Порядок классификации важен (R4): evidence раньше id —
-                    # иначе английская «Evidence» матчится подстрокой «id»
-                    # и колонка доказательств теряется.
-                    if any(
-                        k in cl for k in ("доказательств", "evidence", "вывод", "артефакт", "лог")
-                    ):
-                        header_indices["evidence"] = idx
-                    elif re.search(r"\b(?:id|action)\b|действи|сценари", cl):
-                        header_indices["id"] = idx
-                    elif any(k in cl for k in ("ожидани", "expected")):
-                        header_indices["expected"] = idx
-                    elif any(k in cl for k in ("факт", "actual", "наблюда")):
-                        header_indices["actual"] = idx
-                    elif any(
-                        k in cl for k in ("результат", "статус", "result", "status", "вердикт")
-                    ):
-                        header_indices["result"] = idx
-            else:
-                table_rows.append(cells)
-        else:
-            in_table = False
-
-    return table_rows, header_indices
-
-
-# Валидные статусы строки таблицы проверок (R4: QA-gate не принимает
-# произвольные статусы вроде BANANA/PENDING как «успешные»). N/A — ветка
-# отдельно (обязательное обоснование неприменимости).
-_VALID_ROW_STATUSES: tuple[str, ...] = (
-    "PASS",
-    "PASSED",
-    "OK",
-    "УСПЕШНО",
-    "ПРОЙДЕН",
-    "QA_PASSED",
-)
-
-
-def _validate_qa_table_rows(
-    table_rows: list[list[str]],
-    header_indices: dict[str, int],
-    has_limitations: bool,
-) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
-    """Проверяет строки таблицы приёмки.
-
-    Возвращает (missing_exp_act, missing_evidence, has_failed, has_blocked,
-    missing_na_reason, missing_status, unknown_status). missing_status=True,
-    если у какой-либо строки пустая ячейка «Результат» или колонка
-    отсутствует вовсе. unknown_status=True, если статус непуст, но не входит
-    в _VALID_ROW_STATUSES и не распознан как N/A (R4: BANANA/PENDING —
-    блокеры, а не «успех»).
-    """
-    missing_exp_act = False
-    missing_evidence = False
-    has_failed = False
-    has_blocked = False
-    missing_na_reason = False
-    missing_status = False
-    unknown_status = False
-
-    for row in table_rows:
-        exp_cell = (
-            row[header_indices["expected"]]
-            if "expected" in header_indices and len(row) > header_indices["expected"]
-            else ""
-        )
-        act_cell = (
-            row[header_indices["actual"]]
-            if "actual" in header_indices and len(row) > header_indices["actual"]
-            else ""
-        )
-        ev_cell = (
-            row[header_indices["evidence"]]
-            if "evidence" in header_indices and len(row) > header_indices["evidence"]
-            else ""
-        )
-        res_cell = (
-            row[header_indices["result"]]
-            if "result" in header_indices and len(row) > header_indices["result"]
-            else ""
-        )
-
-        if not exp_cell or not act_cell:
-            missing_exp_act = True
-        if not ev_cell:
-            missing_evidence = True
-        # Пустой или отсутствующий статус строки — блокер: приёмка требует
-        # распознанный непустой результат каждой проверки.
-        if not res_cell.strip():
-            missing_status = True
-
-        res_upper = res_cell.upper()
-        if any(k in res_upper for k in ("FAIL", "FAILED", "QA_FAILED")):
-            has_failed = True
-        elif "BLOCK" in res_upper:
-            has_blocked = True
-        elif "N/A" in res_upper or "NOT APPLICABLE" in res_upper:
-            clean_res = re.sub(r"N/?A", "", res_cell, flags=re.IGNORECASE).strip(" ():-")
-            has_act_reason = any(
-                k in act_cell.lower()
-                for k in ("не применимо", "n/a", "пропуск", "стенд", "ci", "отсутств")
-            )
-            if not clean_res and not has_act_reason and not has_limitations:
-                missing_na_reason = True
-        elif res_upper.strip() and not any(k == res_upper.strip() for k in _VALID_ROW_STATUSES):
-            # Непустой статус вне whitelist — неизвестный вердикт проверки
-            # (BANANA, PENDING, …) не может считаться успехом (R4).
-            unknown_status = True
-
-    return (
-        missing_exp_act,
-        missing_evidence,
-        has_failed,
-        has_blocked,
-        missing_na_reason,
-        missing_status,
-        unknown_status,
-    )
-
-
-def _validate_qa_freeform_text(
-    report_text: str,
-    has_limitations: bool,
-) -> tuple[bool, bool, bool, bool, bool, bool, bool, bool]:
-    """Проверяет неструктурированный (списковый) текст отчёта приёмки.
-
-    Возвращает (has_scenarios, missing_exp_act, missing_evidence, has_failed,
-    has_blocked, missing_na_reason, missing_status, unknown_status).
-    unknown_status=True, если в тексте есть маркер строки-сценария
-    (TC-N/Сценарий/Проверка) или строка «Результат:», но статус не входит в
-    распознаваемые (PASS/PASSED/OK/УСПЕШНО/ПРОЙДЕН/QA_PASSED, N/A, FAIL,
-    BLOCKED) — закрывает обход через freeform-формат (R4).
-    """
-    scenario_matches = re.findall(
-        r"(?:###|##|-)\s*(?:TC-\d+|Сценарий|Проверка)", report_text, re.IGNORECASE
-    )
-    has_scenarios = bool(scenario_matches)
-
-    has_exp = bool(re.search(r"(?:ожида(?:ние|лось)|expected)", report_text, re.IGNORECASE))
-    has_act = bool(re.search(r"(?:факт|наблюда(?:лось|ем)|actual)", report_text, re.IGNORECASE))
-    missing_exp_act = not (has_exp and has_act)
-
-    has_ev = bool(
-        re.search(
-            r"(?:доказательств|evidence|артефакт|лог|log|\.log|\.txt|\.json|\[.*?\]\(.*?\)|```)",
-            report_text,
-            re.IGNORECASE,
-        )
-    )
-    missing_evidence = not has_ev
-
-    has_failed = bool(re.search(r"\b(?:FAIL|FAILED|QA_FAILED)\b", report_text, re.IGNORECASE))
-    has_blocked = bool(re.search(r"\b(?:BLOCKED|ЗАБЛОКИРОВАН)\b", report_text, re.IGNORECASE))
-
-    missing_na_reason = False
-    if (
-        re.search(r"\bN/A\b", report_text, re.IGNORECASE)
-        and not has_limitations
-        and not re.search(r"N/A\s*[:(.]+?[)\n]", report_text, re.IGNORECASE)
-    ):
-        missing_na_reason = True
-
-    # unknown_status: каждая строка-сценарий с явным полем «Результат»/«Статус»
-    # обязана нести распознаваемый вердикт. Общий QA_PASSED в вердикте отчёта
-    # не оправдывает строку с невалидным статусом (R4, mixed-случай).
-    unknown_status = False
-    missing_status = False
-    status_lines = re.findall(
-        r"(?:результат|статус|result|status)\s*[:*]+\s*(.+?)(?:\n|$)", report_text, re.IGNORECASE
-    )
-    if status_lines and not has_failed and not has_blocked:
-        for status_line in status_lines:
-            status_value = status_line.strip().strip("«»\"'").upper()
-            recognized = (
-                any(
-                    k in status_value
-                    for k in ("FAIL", "FAILED", "QA_FAILED", "BLOCKED", "ЗАБЛОКИРОВАН")
-                )
-                or "N/A" in status_value
-                or any(k in status_value for k in _VALID_ROW_STATUSES)
-            )
-            if not status_value:
-                missing_status = True
-            elif not recognized:
-                unknown_status = True
-
-    return (
-        has_scenarios,
-        missing_exp_act,
-        missing_evidence,
-        has_failed,
-        has_blocked,
-        missing_na_reason,
-        missing_status,
-        unknown_status,
-    )
-
-
-def _check_qa_report_session(report_text: str, session: FlowSession) -> list[str]:
-    """Проверяет соответствие session_id в тексте отчёта текущей сессии.
-
-    Точное совпадение только с текущей session.id: task_id сам по себе не
-    отличает повторные запуски (шаг 7, план строка 92). Отсутствие session_id —
-    ошибка, а не разрешение принять старый отчёт.
-    """
-    blockers: list[str] = []
-    # \** допускает markdown-выделение («**Сессия:** <id>»)
-    session_matches = re.findall(
-        r"(?:сессия|session_id|session)\s*[:=]\s*\**\s*([a-zA-Z0-9_\-]+)",
-        report_text,
-        re.IGNORECASE,
-    )
-    if not session_matches:
-        blockers.append(
-            "QA report is not bound to the current session: "
-            f"specify session_id of the current session ('{session.id}')"
-        )
-        return blockers
-    for sid in session_matches:
-        if sid != session.id:
-            blockers.append(
-                f"Отчёт привязан к сессии '{sid}', ожидалась текущая сессия '{session.id}'"
-            )
-            break
-    return blockers
-
-
-def _check_qa_report_verdict(report_text: str) -> tuple[bool, bool]:
-    """Проверяет явное указание вердикта в тексте отчёта."""
-    has_failed = False
-    has_blocked = False
-    verdict_match = re.search(
-        r"(?:вердикт|verdict)\s*[:*]+\s*([A-Za-z0-9_]+)", report_text, re.IGNORECASE
-    )
-    if verdict_match:
-        verdict_val = verdict_match.group(1).upper()
-        if any(k in verdict_val for k in ("FAIL", "FAILED", "QA_FAILED")):
-            has_failed = True
-        elif "BLOCK" in verdict_val:
-            has_blocked = True
-    return has_failed, has_blocked
-
-
-def _collect_qa_blockers(
-    has_scenarios: bool,
-    missing_expected_actual: bool,
-    missing_evidence: bool,
-    has_failed: bool,
-    has_blocked: bool,
-    missing_na_reason: bool,
-    missing_status: bool = False,
-    unknown_status: bool = False,
-) -> list[str]:
-    """Формирует список блокирующих несоответствий отчёта приёмки."""
-    blockers: list[str] = []
-    if not has_scenarios:
-        blockers.append("Отчёт не содержит перечня проверок или сценариев")
-    if missing_expected_actual:
-        blockers.append("В отчёте отсутствуют ожидаемые или фактические результаты проверок")
-    if missing_evidence:
-        blockers.append(
-            "В отчёте отсутствуют ссылки на доказательства (evidence: логи, артефакты или вывод команд)"
-        )
-    if has_failed:
-        blockers.append(
-            "Отчёт содержит непройденные проверки (FAILED): успешное завершение недопустимо"
-        )
-    if has_blocked:
-        blockers.append(
-            "Отчёт содержит заблокированные проверки (BLOCKED): успешное завершение недопустимо"
-        )
-    if missing_na_reason:
-        blockers.append("Проверка со статусом N/A не содержит обоснования неприменимости")
-    if missing_status:
-        blockers.append(
-            "Строка таблицы проверок без статуса результата: колонка «Результат» обязательна и не может быть пустой"
-        )
-    if unknown_status:
-        blockers.append(
-            "unknown_status: строка проверки содержит нераспознанный статус результата "
-            "(BANANA/PENDING и т.п.): допускаются PASS/PASSED/OK/УСПЕШНО/ПРОЙДЕН/QA_PASSED, "
-            "N/A с обоснованием, FAIL/FAILED, BLOCKED"
-        )
-    return blockers
-
-
-def validate_qa_report_gate(
-    session: FlowSession,
-    stage: FlowStage,
-    deliverable: Any,
-    project_root: Path,
-    skills_storage: SkillsStorage | None = None,
-) -> GateResult:
-    """Шлюз проверки отчёта живой приёмки (validate_qa_report).
-
-    Проверяет:
-    1. Наличие и непустоту отчёта (в deliverable или целевом файле).
-    2. Привязку артефакта к сессии (сохранение в context_data; проверка session_id при наличии).
-    3. Перечень проверок/сценариев (минимум один сценарий).
-    4. Ожидаемый и фактический результат для каждой проверки.
-    5. Ссылки на evidence (доказательства: файлы, логи, скриншоты, команды).
-    6. Соответствие итога результатам (без непройденных/заблокированных, N/A с обоснованием).
-    """
-    blockers: list[str] = []
-    warnings: list[str] = []
-
-    report_text, extract_blockers = _extract_qa_report_text(
-        deliverable, stage.meta.target_file, project_root
-    )
-    blockers.extend(extract_blockers)
-    if blockers:
-        return GateResult(passed=False, blockers=blockers)
-
-    if report_text is None or not report_text.strip():
-        return GateResult(
-            passed=False, blockers=["Отчёт приёмки (deliverable) не предоставлен или пуст"]
-        )
-
-    # 2. Привязка к текущей сессии. Флаг qa_report_bound НЕ ставится здесь:
-    # контекст сессии меняется только в advance-логике после успешной проверки
-    # gate, вместе с атомарным сохранением перехода (шаг 7, план строка 92).
-    blockers.extend(_check_qa_report_session(report_text, session))
-
-    # 3. Парсинг сценариев / проверок
-    table_rows, header_indices = _parse_qa_report_table(report_text)
-    has_limitations = bool(
-        re.search(r"##\s*(?:ограничения|limitations)", report_text, re.IGNORECASE)
-    )
-
-    if table_rows and ("result" in header_indices or "id" in header_indices):
-        has_scenarios = True
-        (
-            missing_expected_actual,
-            missing_evidence,
-            has_failed,
-            has_blocked,
-            missing_na_reason,
-            missing_status,
-            unknown_status,
-        ) = _validate_qa_table_rows(table_rows, header_indices, has_limitations)
-    else:
-        (
-            has_scenarios,
-            missing_expected_actual,
-            missing_evidence,
-            has_failed,
-            has_blocked,
-            missing_na_reason,
-            missing_status,
-            unknown_status,
-        ) = _validate_qa_freeform_text(report_text, has_limitations)
-
-    verdict_failed, verdict_blocked = _check_qa_report_verdict(report_text)
-    has_failed = has_failed or verdict_failed
-    has_blocked = has_blocked or verdict_blocked
-
-    blockers.extend(
-        _collect_qa_blockers(
-            has_scenarios,
-            missing_expected_actual,
-            missing_evidence,
-            has_failed,
-            has_blocked,
-            missing_na_reason,
-            missing_status,
-            unknown_status,
-        )
-    )
-
-    if blockers:
-        return GateResult(passed=False, blockers=blockers, warnings=warnings)
-
-    return GateResult(passed=True, blockers=[], warnings=warnings)
-
-
-GateFunc = Callable[[FlowSession, FlowStage, Any, Path, SkillsStorage | None], GateResult]
-
-# Реестр доступных шлюзов качества (GATE_REGISTRY).
-# Валидаторы verify_catalog.py динамически запрашивают этот реестр.
-GATE_REGISTRY: dict[str, GateFunc] = {
-    "validate_plan": validate_plan_gate,
-    "validate_qa_report": validate_qa_report_gate,
-    "validate_report": validate_qa_report_gate,
-}
-
-
-def _bundle_stage_agent(
-    stage: FlowStage,
-    root: Path,
-    bundler: AgentBundler | None = None,
-    skills_storage: SkillsStorage | None = None,
-    profile: AgentProfile | None = None,
-    target: str = "antigravity",
-) -> dict[str, Any] | None:
-    """Генерирует бандл субагента этапа с контролем лимита токенов TokenGuard."""
-    if not stage.meta.agent:
-        return None
-
-    try:
-        b = bundler
-        if b is None:
-            db_path = get_cache_dir(root) / "skills_fts.db"
-            store = skills_storage or (SkillsStorage(db_path) if db_path.exists() else None)
-            if store is None:
-                # Кэш ещё не построен (первая сессия в новом проекте): AgentBundler
-                # требует storage — создаём in-memory и синхронизируем с каталогом
-                # скиллов, чтобы бандлы агентов работали с первого запуска.
-                store = SkillsStorage(get_cache_dir(root) / "skills_fts.db")
-                skills_dirs = _skills_sync_dirs(root)
-                if skills_dirs:
-                    SkillsSynchronizer(store, skills_dirs).sync()
-            b = AgentBundler(storage=store)
-
-        eff_profile = profile
-        if eff_profile is None:
-            eff_profile = b.load_profile(stage.meta.agent, root)
-            canonical_proj = detect_canonical_project_name(root)
-            eff_override = b.find_override(stage.meta.agent, target, canonical_proj, root)
-            if eff_override is not None:
-                eff_profile = merge_profile_with_override(eff_profile, eff_override)
-
-        # Передаем в бандлер только те настройки, которые относятся к скиллам агента
-        agent_skill_options = {
-            k: v for k, v in stage.meta.skill_options.items() if k in eff_profile.skills
-        }
-
-        bundled_text = b.bundle_agent(
-            stage.meta.agent,
-            profile=eff_profile,
-            target=target,
-            project_root=root,
-            skill_options=agent_skill_options,
-        )
-        guard = TokenGuard()
-        enforced_text, truncated = guard.enforce_budget(bundled_text, raise_on_core_overflow=True)
-        return {
-            "name": stage.meta.agent,
-            "bundle": enforced_text,
-            "truncated": truncated,
-        }
-    except AssemblyBudgetExceededError:
-        raise
-    except Exception as err:
-        return {
-            "name": stage.meta.agent,
-            "error": str(err),
-            "bundle": None,
-            "truncated": False,
-        }
-
-
-def _compile_stage_skills(
-    stage: FlowStage,
-    root: Path,
-    skills_storage: SkillsStorage | None = None,
-    catalog_root: Path | None = None,
-) -> tuple[str, list[str], bool]:
-    """Компилирует скиллы этапа (stage.meta.skills) в дополнение инструкции.
-
-    F1: имена скиллов в meta — НЕ контент; сборка идёт тем же путём, что и
-    бандлинг агентов: SlotCompiler.assemble_skill со всеми available_slots
-    карточки (эталон — AgentBundler.bundle_agent), стек проекта — из единого
-    ProjectContext. Объединённая «инструкция + скиллы» проходит TokenGuard:
-    бюджет этапа не превышает лимит даже с несколькими скиллами.
-
-    Возвращает (supplement_text, compiled_names, truncated). Отсутствующий
-    скилл — предупреждение в тексте, этап не падает (как в бандлере агентов).
-    """
-    if not stage.meta.skills:
-        return "", [], False
-
-    from mcp_skills.project_context import get_project_context, supplement_mode_axis
-    from mcp_skills.slot_compiler import SlotCompiler
-
-    store = skills_storage
-    if store is None:
-        db_path = get_cache_dir(root) / "skills_fts.db"
-        if not db_path.exists():
-            return "", [], False
-        store = SkillsStorage(db_path)
-
-    compiled_parts: list[str] = []
-    compiled_names: list[str] = []
-    truncated = False
-
-    ctx = get_project_context(root)
-    stack, _ = supplement_mode_axis(ctx.stack, ctx.mode)
-    compiler = SlotCompiler(store, catalog_root=catalog_root)
-
-    for skill_name in stage.meta.skills:
-        try:
-            opt_item = stage.meta.skill_options.get(skill_name)
-            touches = opt_item.touches if opt_item is not None else None
-            _, content = compiler.assemble_skill(
-                name=skill_name,
-                touches=touches,
-                project_stack=stack,
-                project_root=root,
-            )
-            compiled_parts.append(content)
-            compiled_names.append(skill_name)
-        except SkillNotFoundError:
-            compiled_parts.append(f"> ⚠️ [Скилл '{skill_name}' не найден в реестре]")
-
-    supplement = "\n\n---\n\n".join(compiled_parts) if compiled_parts else ""
-    if supplement:
-        guard = TokenGuard()
-        if not guard.is_within_budget(supplement):
-            supplement, truncated = guard.enforce_budget(supplement, raise_on_core_overflow=True)
-    return supplement, compiled_names, truncated
-
-
-def _collect_available_slots_for_skill(store: SkillsStorage, name: str) -> list[str]:
-    """Слоты скилла с extends-предками через компилятор."""
-    return SlotCompiler(store).collect_available_slots(name)
-
-
-def _skills_sync_dirs(root: Path) -> list[Path]:
-    """Каталоги скиллов для синхронизации кэша: репозиторий скиллов + проект."""
-    dirs: list[Path] = []
-    repo = resolve_skills_repo_dir()
-    skills_base = repo if repo.name == "skills" else repo / "skills"
-    if skills_base.is_dir():
-        dirs.append(skills_base)
-    proj_skills = root / ".agents" / "skills"
-    if proj_skills.is_dir():
-        dirs.append(proj_skills)
-    return dirs
-
-
-def _catalog_root(skills_dir: Path | None) -> Path:
-    repo = skills_dir if skills_dir is not None else resolve_skills_repo_dir()
-    return repo.parent if repo.name == "skills" else repo
-
-
-def _instruction_resource_candidates(
-    stage: FlowStage, cat_root: Path, root: Path
-) -> list[tuple[str, str | None, str]]:
-    candidates: list[tuple[str, str | None, str]] = []
-    pattern = r'load_skill\(\s*name=["\'](?P<skill>[a-zA-Z0-9_-]+)["\']\s*,\s*resource_id=["\'](?P<res>[^"\']+)["\']\s*\)'
-    for match in re.finditer(pattern, stage.instruction):
-        candidates.append((match.group("res"), match.group("skill"), Path(match.group("res")).name))
-    origin = stage.source_file or cat_root / "__stage__.md"
-    for title, link in re.findall(r"\[([^\]]+)\]\(([^)]+)\)", stage.instruction):
-        res_id, anchor = resolve_link_to_resource_id(link, origin, cat_root, root)
-        if res_id is not None:
-            full_id = f"{res_id}#{anchor}" if anchor else res_id
-            candidates.append((full_id, None, title.strip("`")))
-    for template in re.findall(r"(?:templates/[a-zA-Z0-9_.-]+\.template\.md)", stage.instruction):
-        candidates.append((template, None, Path(template).name))
-    return candidates
-
-
-def _resource_descriptor(resource_id: str, owner: str, title: str) -> dict[str, Any]:
-    return {
-        "resource_id": resource_id,
-        "owner_skill": owner,
-        "title": title,
-        "type": determine_resource_type(resource_id),
-    }
-
-
-def _resource_owner(
-    resource_id: str, owner: str | None, store: SkillsStorage | None, cat_root: Path, root: Path
-) -> str:
-    cards = (
-        ([entry[0]] if (entry := store.get_skill(owner)) else [])
-        if owner and store
-        else (store.list_all_skills() if store else [])
-    )
-    for card in cards:
-        try:
-            associated = is_resource_associated_with_skill(
-                card.name, resource_id, cat_root, card.base_dir, storage=store, project_root=root
-            )
-        except FileNotFoundError:
-            break
-        if associated:
-            return card.name
-    if owner is not None:
-        raise ValueError(
-            f"Ресурс '{resource_id}' не связан со скиллом-владельцем '{owner}' или недоступен"
-        )
-    raise ValueError(
-        f"Ресурс '{resource_id}' не имеет объявленного скилла-владельца или недоступен"
-    )
-
-
-def _extract_stage_resources(
-    stage: FlowStage,
-    root: Path,
-    skills_storage: SkillsStorage | None = None,
-    catalog_root: Path | None = None,
-) -> list[dict[str, Any]]:
-    """Общий resolver для origin-relative ссылок, выбранных ресурсов и блоков этапа."""
-    cat_root = catalog_root or _catalog_root(None)
-    store = skills_storage
-    if store is None:
-        db_path = get_cache_dir(root) / "skills_fts.db"
-        store = SkillsStorage(db_path) if db_path.exists() else None
-    found: dict[tuple[str, str], dict[str, Any]] = {}
-    candidates = _instruction_resource_candidates(stage, cat_root, root)
-    for skill, options in stage.meta.skill_options.items():
-        candidates.extend((rid, skill, Path(rid).name) for rid in options.resources or [])
-    for rid, owner, title in candidates:
-        owner = _resource_owner(rid, owner, store, cat_root, root)
-        found[(owner, rid)] = _resource_descriptor(rid, owner, title)
-    if store is not None:
-        from mcp_skills.project_context import get_project_context, supplement_mode_axis
-
-        ctx = get_project_context(root)
-        stack, _ = supplement_mode_axis(ctx.stack, ctx.mode)
-        compiler = SlotCompiler(store, catalog_root=cat_root)
-        for name in stage.meta.skills:
-            if store.get_skill(name) is None:
-                continue
-            selected_options = stage.meta.skill_options.get(name)
-            _, _, resources = compiler.assemble_skill_with_resources(
-                name,
-                touches=selected_options.touches if selected_options else None,
-                project_stack=stack,
-                project_root=root,
-            )
-            for resource in resources:
-                rid = resource["resource_id"]
-                if resource.get("anchor"):
-                    rid += "#" + resource["anchor"]
-                resource = {**resource, "resource_id": rid}
-                found.setdefault((name, rid), resource)
-    return list(found.values())
-
-
-def _stage_agent_context(
-    stage: FlowStage,
-    root: Path,
-    bundler: AgentBundler | None,
-    store: SkillsStorage | None,
-    cat_root: Path,
-    target: str = "antigravity",
-) -> tuple[AgentBundler | None, AgentProfile | None]:
-    if not stage.meta.agent:
-        return bundler, None
-    if bundler is None:
-        store = store or SkillsStorage(get_cache_dir(root) / "skills_fts.db")
-        skills_dirs = [cat_root / "skills", root / ".agents" / "skills"]
-        SkillsSynchronizer(store, [path for path in skills_dirs if path.is_dir()]).sync()
-        bundler = AgentBundler(
-            storage=store, compiler=SlotCompiler(store, catalog_root=cat_root), skills_dir=cat_root
-        )
-    try:
-        profile = bundler.load_profile(stage.meta.agent, root)
-        override = bundler.find_override(
-            stage.meta.agent, target, detect_canonical_project_name(root), root
-        )
-        if override is not None:
-            profile = merge_profile_with_override(profile, override)
-        return bundler, profile
-    except (ValueError, OSError) as err:
-        logger.warning("Не удалось загрузить профиль агента этапа %s: %s", stage.id, err)
-        return bundler, None
-
-
-def _validate_stage_skill_options(
-    stage: FlowStage,
-    profile: AgentProfile | None,
-    root: Path,
-    store: SkillsStorage | None,
-    cat_root: Path,
-) -> None:
-    allowed = set(stage.meta.skills) | (set(profile.skills) if profile else set())
-    if store is None:
-        db_path = get_cache_dir(root) / "skills_fts.db"
-        store = SkillsStorage(db_path) if db_path.exists() else None
-    for name, options in stage.meta.skill_options.items():
-        if name not in allowed:
-            raise ValueError(
-                f"Неизвестный скилл '{name}' в skill_options этапа '{stage.id}'. Допустимые скиллы: {sorted(allowed)}"
-            )
-        if store is None:
-            continue
-        available = SlotCompiler(store, catalog_root=cat_root).collect_available_slots(name)
-        unknown = [slot for slot in options.touches or [] if slot not in available]
-        if unknown:
-            raise ValueError(
-                f"Неизвестные секции для скилла '{name}' в skill_options этапа '{stage.id}': {unknown}. Доступные слоты: {available}"
-            )
-        for resource_id in options.resources or []:
-            _resource_owner(resource_id, name, store, cat_root, root)
-
-
-def _stage_instruction(
-    stage: FlowStage, root: Path, store: SkillsStorage | None, cat_root: Path
-) -> dict[str, Any]:
-    instruction = stage.instruction
-    details: dict[str, Any] = {}
-    if stage.meta.skills:
-        supplement, names, trimmed = _compile_stage_skills(stage, root, store, cat_root)
-        if supplement:
-            instruction += f"\n\n---\n\n# Скиллы этапа\n\n{supplement}"
-        details.update(skills_compiled=names, skills_truncated=trimmed)
-    instruction, trimmed = TokenGuard().enforce_budget(instruction, raise_on_core_overflow=True)
-    details["instruction"] = instruction
-    if trimmed:
-        details["skills_truncated"] = True
-    return details
-
-
-def _stage_gate_hint(stage: FlowStage, root: Path) -> str | None:
-    meta = stage.meta
-    if not (
-        meta.gate
-        or meta.require_verdict
-        or meta.require_human_confirm
-        or meta.deliverable_must_exist
-    ):
-        return None
-    note = (
-        f"При следующем advance гейт '{meta.gate}' проверит deliverable"
-        if meta.gate
-        else "При следующем advance действуют требования качества"
-    )
-    if meta.target_file:
-        note += f": файл '{meta.target_file}' в корне проекта ({root}) — создайте его там заранее"
-    if meta.require_verdict:
-        note += "; этап требует явный verdict (approved/needs_work)"
-    if meta.require_human_confirm:
-        note += "; этап требует подтверждения человека — передайте human_confirmed=true после явного согласования с пользователем"
-    if meta.deliverable_must_exist:
-        note += "; deliverable должен быть существующим файлом"
-    return note
-
-
-def _append_flow_payload_metadata(
-    payload: dict[str, Any], stage: FlowStage, session: FlowSession
-) -> None:
-    if "flow_options" in session.context_data:
-        payload["flow_options"] = session.context_data["flow_options"]
-        payload["requested_flow"] = session.context_data.get("requested_flow", session.flow_name)
-        payload["canonical_flow"] = session.context_data.get("canonical_flow", session.flow_name)
-    if stage.meta.transitions:
-        effective_options = session.context_data.get("flow_options", {})
-        transition_counts = session.context_data.get("transition_counts", {})
-        payload["available_transitions"] = [
-            label
-            for label, spec in stage.meta.transitions.items()
-            if all(
-                key in effective_options and _same_option_value(effective_options[key], value)
-                for key, value in spec.when_options.items()
-            )
-            and transition_counts.get(f"{stage.id}:{label}", 0) < spec.max_uses
-        ]
-
-
-def _build_stage_payload(
-    stage: FlowStage,
-    total_stages: int,
-    session: FlowSession,
-    root: Path,
-    bundler: AgentBundler | None = None,
-    skills_storage: SkillsStorage | None = None,
-    skills_dir: Path | None = None,
-    target: str = "antigravity",
-) -> dict[str, Any]:
-    """Формирует структурированный ответ этапа для передачи модели."""
-    payload: dict[str, Any] = {
-        "status": session.status.value,
-        "session_id": session.id,
-        "flow_name": session.flow_name,
-        "stage": {
-            "id": stage.id,
-            "title": stage.title,
-            "order": stage.order,
-            "total_stages": total_stages,
-            "instruction": stage.instruction,
-            "meta": stage.meta.model_dump(),
-        },
-    }
-
-    cat_root = _catalog_root(skills_dir)
-
-    bundler, effective_agent_profile = _stage_agent_context(
-        stage, root, bundler, skills_storage, cat_root, target=target
-    )
-    _validate_stage_skill_options(stage, effective_agent_profile, root, skills_storage, cat_root)
-
-    stage_resources = _extract_stage_resources(stage, root, skills_storage, cat_root)
-    if stage_resources:
-        payload["stage"]["resources"] = stage_resources
-
-    payload["stage"].update(_stage_instruction(stage, root, skills_storage, cat_root))
-    if stage.meta.required_tools:
-        payload["required_tools"] = stage.meta.required_tools
-
-    if stage.meta.agent:
-        agent_bundle = _bundle_stage_agent(
-            stage, root, bundler, skills_storage, effective_agent_profile, target=target
-        )
-        if agent_bundle:
-            payload["subagent"] = agent_bundle
-        if effective_agent_profile is not None:
-            req_caps: list[str] = []
-            if effective_agent_profile.permissions.write:
-                req_caps.append("write")
-            if effective_agent_profile.permissions.subagents:
-                req_caps.append("subagents")
-            if effective_agent_profile.permissions.mcp:
-                req_caps.append("mcp")
-            payload["agent_spec"] = {
-                "name": stage.meta.agent,
-                "role": effective_agent_profile.role,
-                "description": effective_agent_profile.description,
-                "instructions": effective_agent_profile.instructions,
-                "skills": effective_agent_profile.skills,
-                "permissions": effective_agent_profile.permissions.model_dump(),
-                "tools": effective_agent_profile.tools,
-                "required_capabilities": req_caps,
-            }
-
-    if stage.meta.dispatch_agents:
-        payload["dispatch_agents"] = True
-        policy = stage.meta.dispatch_policy
-        if policy is not None:
-            payload["dispatch_policy"] = policy.model_dump()
-        elif session.context_data.get("dispatch_policy") is not None:
-            payload["dispatch_policy"] = session.context_data["dispatch_policy"]
-        payload["hint"] = (
-            "Запустите субагентов нативным механизмом хоста (например, invoke_subagent в "
-            "Antigravity или task/subagent в OpenCode), дождитесь завершения, затем передайте результаты: "
-            "step_flow(action='advance', deliverable=...). Движок субагентов сам "
-            "не запускает — он библиотека."
-        )
-
-    gate_hint = _stage_gate_hint(stage, root)
-    if gate_hint:
-        payload["gate_hint"] = gate_hint
-    if stage.meta.loop_max is not None and stage.meta.loop_max < 5:
-        payload["loop_hint"] = (
-            f"Максимум итераций этапа: {stage.meta.loop_max}. При verdict='needs_work' "
-            "счётчик растёт; превышение — Circuit Breaker (эскалация к пользователю)."
-        )
-
-    payload["required_inputs"] = _compute_stage_required_inputs(stage)
-    payload["next_call"] = _compute_stage_next_call(session, stage, root, target=target)
-    _append_flow_payload_metadata(payload, stage, session)
-
-    return payload
-
-
-def _completed_response(session: FlowSession, flow_def: FlowDefinition) -> dict[str, Any]:
-    """Completed-ответ сессии с мостики «куда идти дальше» (F1).
-
-    next_flows берётся из определения флоу (frontmatter next_flows, смерженный
-    с оверрайдом); флоу без мостиков получает прежний ответ без новых ключей.
-    """
-    res: dict[str, Any] = {
-        "status": FlowStatus.COMPLETED.value,
-        "session_id": session.id,
-        "flow_name": session.flow_name,
-        "message": f"Флоу '{session.flow_name}' успешно завершен!",
-        "required_inputs": [],
-        "next_call": None,
-    }
-    if flow_def.next_flows:
-        res["next_flows"] = list(flow_def.next_flows)
-        res["next_flow_hint"] = "Следующие сценарии после завершения: " + ", ".join(
-            f"'{nf}' (step_flow(flow='{nf}'))" for nf in flow_def.next_flows
-        )
+    orch_summary = summarize_orchestration_state(session.context_data.get("orchestration"))
+    if orch_summary is not None:
+        res["orchestration_state"] = orch_summary
     return res
 
 
@@ -1448,6 +458,9 @@ class FlowEngine:
             updated_at=now,
         )
 
+        if is_orchestration_flow(flow_def):
+            init_orchestration_state(session, flow_def, root)
+
         prepared_payload = _build_stage_payload(
             first_stage,
             len(flow_def.stage_order),
@@ -1466,6 +479,7 @@ class FlowEngine:
             event="start_flow",
             notes=f"Старт сценария '{name}'",
         )
+        _sync_orchestration_after_commit(root, session)
 
         return prepared_payload
 
@@ -1478,7 +492,7 @@ class FlowEngine:
         валидный файл из любого источника «спасает» ненайденные остальные
         (verdict_6 T4 — target_file больше не глушит корректный file_path).
         Строка-deliverable, похожая на путь, трактуется как путь
-        (согласовано с validate_plan_gate); текст без маркеров пути —
+        (согласовано с validate_plan); текст без маркеров пути —
         не файл. Пустой артефакт фиксируется только когда ни один
         источник не дал содержимого.
         """
@@ -1538,10 +552,10 @@ class FlowEngine:
         human_confirmed: bool = False,
         target: str = "antigravity",
     ) -> dict[str, Any] | None:
-        """Проверяет шлюз качества перед обработкой вердикта.
+        """Проверяет валидатор качества перед обработкой вердикта.
 
         Включает декларативные проверки (require_verdict, require_human_confirm, deliverable_must_exist)
-        и регистровый гейт из GATE_REGISTRY (если задан stage.meta.gate).
+        и регистровый валидатор из VALIDATOR_REGISTRY (если задан stage.meta.validator).
         Проверка require_human_confirm идёт по явному флагу human_confirmed (D4):
         непустые notes не трактуются как прокси-подтверждение человека —
         подтверждение фиксирует вызывающая сторона после согласования.
@@ -1551,7 +565,7 @@ class FlowEngine:
             or stage.meta.require_human_confirm
             or stage.meta.deliverable_must_exist
         )
-        if not stage.meta.gate and not has_declarative:
+        if not stage.meta.validator and not has_declarative:
             return None
 
         blockers: list[str] = []
@@ -1571,20 +585,20 @@ class FlowEngine:
         if stage.meta.deliverable_must_exist:
             self._check_deliverable_file(stage, deliverable, root, blockers)
 
-        if stage.meta.gate:
-            gate_func = GATE_REGISTRY.get(stage.meta.gate)
-            if not gate_func:
-                msg = f"Неизвестный шлюз качества '{stage.meta.gate}'"
+        if stage.meta.validator:
+            validator_func = VALIDATOR_REGISTRY.get(stage.meta.validator)
+            if not validator_func:
+                msg = f"Неизвестный шлюз качества '{stage.meta.validator}'"
                 raise GateValidationError(msg)
 
-            gate_res = gate_func(session, stage, deliverable, root, self.skills_storage)
+            gate_res = validator_func(session, stage, deliverable, root, self.skills_storage)
             blockers.extend(gate_res.blockers)
             warnings.extend(gate_res.warnings)
 
         if not blockers:
             return None
 
-        gate_name = stage.meta.gate or "declarative_checks"
+        gate_name = stage.meta.validator or "declarative_checks"
         storage.record_history(
             session_id=session.id,
             stage_id=stage.id,
@@ -1622,6 +636,7 @@ class FlowEngine:
         storage: FlowStorage,
         verdict: FlowVerdict | str | None = None,
         target: str = "antigravity",
+        deliverable: Any = None,
     ) -> dict[str, Any]:
         """Продвигает этап без агента/ревьюера в автоматическом режиме.
 
@@ -1638,12 +653,26 @@ class FlowEngine:
                 notes_default="Требуется доработка до автоперехода",
                 root=root,
                 target=target,
+                flow_def=flow_def,
+                deliverable=deliverable,
             )
         idx = flow_def.stage_order.index(current_stage.id)
         if idx + 1 < len(flow_def.stage_order):
+            previous_iteration = session.iteration_count
             next_stage_id = flow_def.stage_order[idx + 1]
             session.current_stage_id = next_stage_id
             session.iteration_count = 1
+            renamed_from = _maybe_update_orchestration(
+                session,
+                flow_def,
+                root,
+                stage_id=current_stage.id,
+                stage_validator=current_stage.meta.validator,
+                stage_iteration=previous_iteration,
+                deliverable=deliverable,
+                verdict=verdict.value if isinstance(verdict, FlowVerdict) else verdict,
+                notes=notes,
+            )
             prepared_payload = _build_stage_payload(
                 flow_def.stages[session.current_stage_id],
                 len(flow_def.stage_order),
@@ -1659,17 +688,30 @@ class FlowEngine:
                 history_events=[
                     {
                         "stage_id": current_stage.id,
-                        "iteration": session.iteration_count,
+                        "iteration": previous_iteration,
                         "event": "advance_auto",
                         "verdict": "auto",
                         "notes": notes or "Автопереход этапа без ревьюера",
                     }
                 ],
             )
+            _sync_orchestration_after_commit(root, session, renamed_from)
 
             return prepared_payload
 
         session.status = FlowStatus.COMPLETED
+        renamed_from = _maybe_update_orchestration(
+            session,
+            flow_def,
+            root,
+            stage_id=current_stage.id,
+            stage_validator=current_stage.meta.validator,
+            stage_iteration=session.iteration_count,
+            deliverable=deliverable,
+            verdict=verdict.value if isinstance(verdict, FlowVerdict) else verdict,
+            notes=notes,
+            final_status_override="COMPLETED",
+        )
         storage.update_session(
             session,
             history_events=[
@@ -1681,6 +723,7 @@ class FlowEngine:
                 }
             ],
         )
+        _sync_orchestration_after_commit(root, session, renamed_from)
         return _completed_response(session, flow_def)
 
     def _advance_named_transition(
@@ -1694,6 +737,7 @@ class FlowEngine:
         root: Path,
         storage: FlowStorage,
         target: str,
+        deliverable: Any = None,
     ) -> dict[str, Any]:
         """Apply a guarded named transition with its counter and history atomically."""
         spec = current_stage.meta.transitions.get(label)
@@ -1728,6 +772,17 @@ class FlowEngine:
         session.context_data["transition_counts"] = counts
         session.current_stage_id = spec.target
         session.iteration_count = 1
+        renamed_from = _maybe_update_orchestration(
+            session,
+            flow_def,
+            root,
+            stage_id=current_stage.id,
+            stage_validator=current_stage.meta.validator,
+            stage_iteration=previous_iteration,
+            deliverable=deliverable,
+            verdict=normalized.value if normalized else None,
+            notes=notes,
+        )
         prepared_payload = _build_stage_payload(
             flow_def.stages[spec.target],
             len(flow_def.stage_order),
@@ -1753,6 +808,7 @@ class FlowEngine:
                 }
             ],
         )
+        _sync_orchestration_after_commit(root, session, renamed_from)
         return prepared_payload
 
     def _advance_review_stage(
@@ -1765,6 +821,7 @@ class FlowEngine:
         root: Path,
         storage: FlowStorage,
         target: str = "antigravity",
+        deliverable: Any = None,
     ) -> dict[str, Any]:
         """Обрабатывает вердикт ревьюера с контролем Circuit Breaker."""
         if verdict is None:
@@ -1790,15 +847,29 @@ class FlowEngine:
                 notes_default="",
                 root=root,
                 target=target,
+                flow_def=flow_def,
+                deliverable=deliverable,
             )
 
         # verdict == FlowVerdict.APPROVED
+        previous_iteration = session.iteration_count
         session.iteration_count = 1
         idx = flow_def.stage_order.index(current_stage.id)
 
         if idx + 1 < len(flow_def.stage_order):
             next_stage_id = flow_def.stage_order[idx + 1]
             session.current_stage_id = next_stage_id
+            renamed_from = _maybe_update_orchestration(
+                session,
+                flow_def,
+                root,
+                stage_id=current_stage.id,
+                stage_validator=current_stage.meta.validator,
+                stage_iteration=previous_iteration,
+                deliverable=deliverable,
+                verdict=verdict.value,
+                notes=notes,
+            )
             prepared_payload = _build_stage_payload(
                 flow_def.stages[session.current_stage_id],
                 len(flow_def.stage_order),
@@ -1814,35 +885,49 @@ class FlowEngine:
                 history_events=[
                     {
                         "stage_id": current_stage.id,
-                        "iteration": session.iteration_count,
+                        "iteration": previous_iteration,
                         "event": "review_approved",
                         "verdict": verdict.value,
                         "notes": notes,
                     }
                 ],
             )
+            _sync_orchestration_after_commit(root, session, renamed_from)
 
             return prepared_payload
 
         session.status = FlowStatus.COMPLETED
+        renamed_from = _maybe_update_orchestration(
+            session,
+            flow_def,
+            root,
+            stage_id=current_stage.id,
+            stage_validator=current_stage.meta.validator,
+            stage_iteration=previous_iteration,
+            deliverable=deliverable,
+            verdict=verdict.value,
+            notes=notes,
+            final_status_override="COMPLETED",
+        )
         storage.update_session(
             session,
             history_events=[
                 {
                     "stage_id": current_stage.id,
-                    "iteration": session.iteration_count,
+                    "iteration": previous_iteration,
                     "event": "review_approved",
                     "verdict": verdict.value,
                     "notes": notes,
                 },
                 {
                     "stage_id": current_stage.id,
-                    "iteration": session.iteration_count,
+                    "iteration": previous_iteration,
                     "event": "completed",
                     "notes": "Все этапы флоу успешно завершены",
                 },
             ],
         )
+        _sync_orchestration_after_commit(root, session, renamed_from)
         return _completed_response(session, flow_def)
 
     def advance_flow(
@@ -1858,7 +943,7 @@ class FlowEngine:
         target: str | None = None,
         transition: str | None = None,
     ) -> dict[str, Any]:
-        """Продвигает сессию флоу по этапам с проверкой шлюзов качества и ревью.
+        """Продвигает сессию флоу по этапам с проверкой валидаторов качества и ревью.
 
         update_git_branch применяется вместе с переходом этапа в одной
         транзакции update_session (D5): используется при продолжении
@@ -1870,7 +955,7 @@ class FlowEngine:
         session = storage.get_session(session_id)
         if session is None:
             msg = f"Сессия '{session_id}' не найдена"
-            raise FlowNotFoundError(msg)
+            raise SessionNotFoundError(msg)
 
         if target is not None:
             effective_target = _validate_target(target)
@@ -1971,7 +1056,7 @@ class FlowEngine:
         if session.status == FlowStatus.BLOCKED_ESCALATE:
             msg = (
                 f"Сессия '{session_id}' заблокирована Circuit Breaker. "
-                "Вызовите resolve_flow_escalation для разрешения."
+                "Вызовите step_flow(action='escalation_resolve', resolution=...) для разрешения."
             )
             raise SessionConflictError(msg)
 
@@ -2013,6 +1098,7 @@ class FlowEngine:
             root,
             storage,
             effective_target,
+            deliverable=deliverable,
         )
 
     def _advance_after_gate(
@@ -2026,12 +1112,22 @@ class FlowEngine:
         root: Path,
         storage: FlowStorage,
         target: str,
+        deliverable: Any = None,
     ) -> dict[str, Any]:
-        if current_stage.meta.gate in ("validate_qa_report", "validate_report"):
+        if current_stage.meta.validator in ("validate_qa_report", "validate_report"):
             session.context_data["qa_report_bound"] = True
         if transition is not None:
             return self._advance_named_transition(
-                session, flow_def, current_stage, transition, verdict, notes, root, storage, target
+                session,
+                flow_def,
+                current_stage,
+                transition,
+                verdict,
+                notes,
+                root,
+                storage,
+                target,
+                deliverable=deliverable,
             )
         if (
             current_stage.meta.transition_required
@@ -2048,9 +1144,18 @@ class FlowEngine:
                 storage,
                 verdict=verdict,
                 target=target,
+                deliverable=deliverable,
             )
         return self._advance_review_stage(
-            session, flow_def, current_stage, verdict, notes, root, storage, target=target
+            session,
+            flow_def,
+            current_stage,
+            verdict,
+            notes,
+            root,
+            storage,
+            target=target,
+            deliverable=deliverable,
         )
 
     def resolve_flow_escalation(
@@ -2073,7 +1178,7 @@ class FlowEngine:
         session = storage.get_session(session_id)
         if session is None:
             msg = f"Сессия '{session_id}' не найдена"
-            raise FlowNotFoundError(msg)
+            raise SessionNotFoundError(msg)
 
         if session.status != FlowStatus.BLOCKED_ESCALATE:
             msg = (
@@ -2092,6 +1197,9 @@ class FlowEngine:
 
         if resolution == "override_approved":
             previous_stage_id = session.current_stage_id
+            previous_iteration = session.iteration_count
+            previous_stage = flow_def.stages.get(previous_stage_id)
+            previous_validator = previous_stage.meta.validator if previous_stage else None
             session.iteration_count = 1
             session.status = FlowStatus.ACTIVE
 
@@ -2099,6 +1207,17 @@ class FlowEngine:
             if idx + 1 < len(flow_def.stage_order):
                 next_stage_id = flow_def.stage_order[idx + 1]
                 session.current_stage_id = next_stage_id
+                renamed_from = _maybe_update_orchestration(
+                    session,
+                    flow_def,
+                    root,
+                    stage_id=previous_stage_id,
+                    stage_validator=previous_validator,
+                    stage_iteration=previous_iteration,
+                    verdict="approved",
+                    notes=notes,
+                    final_status_override="IN_PROGRESS",
+                )
                 prepared_payload = _build_stage_payload(
                     flow_def.stages[session.current_stage_id],
                     len(flow_def.stage_order),
@@ -2114,38 +1233,59 @@ class FlowEngine:
                     history_events=[
                         {
                             "stage_id": previous_stage_id,
-                            "iteration": session.iteration_count,
+                            "iteration": previous_iteration,
                             "event": "escalation_override_approved",
                             "notes": notes or "Принудительное одобрение этапа после эскалации",
                         }
                     ],
                 )
+                _sync_orchestration_after_commit(root, session, renamed_from)
 
                 return prepared_payload
             else:
                 session.status = FlowStatus.COMPLETED
+                renamed_from = _maybe_update_orchestration(
+                    session,
+                    flow_def,
+                    root,
+                    stage_id=previous_stage_id,
+                    stage_validator=previous_validator,
+                    stage_iteration=previous_iteration,
+                    verdict="approved",
+                    notes=notes,
+                    final_status_override="COMPLETED",
+                )
                 storage.update_session(
                     session,
                     history_events=[
                         {
                             "stage_id": previous_stage_id,
-                            "iteration": session.iteration_count,
+                            "iteration": previous_iteration,
                             "event": "escalation_override_approved",
                             "notes": notes or "Принудительное одобрение этапа после эскалации",
                         },
                         {
                             "stage_id": previous_stage_id,
-                            "iteration": session.iteration_count,
+                            "iteration": previous_iteration,
                             "event": "completed",
                             "notes": f"Флоу '{session.flow_name}' успешно завершен",
                         },
                     ],
                 )
+                _sync_orchestration_after_commit(root, session, renamed_from)
                 return _completed_response(session, flow_def)
 
         if resolution == "retry":
             session.iteration_count = 1
             session.status = FlowStatus.ACTIVE
+            renamed_from = _maybe_update_orchestration(
+                session,
+                flow_def,
+                root,
+                stage_id=session.current_stage_id,
+                notes=notes,
+                final_status_override="IN_PROGRESS",
+            )
             prepared_payload = _build_stage_payload(
                 flow_def.stages[session.current_stage_id],
                 len(flow_def.stage_order),
@@ -2167,10 +1307,19 @@ class FlowEngine:
                     }
                 ],
             )
+            _sync_orchestration_after_commit(root, session, renamed_from)
 
             return prepared_payload
 
         session.status = FlowStatus.ABORTED
+        renamed_from = _maybe_update_orchestration(
+            session,
+            flow_def,
+            root,
+            stage_id=session.current_stage_id,
+            notes=notes,
+            final_status_override="ABORTED",
+        )
         storage.update_session(
             session,
             history_events=[
@@ -2182,14 +1331,8 @@ class FlowEngine:
                 }
             ],
         )
-        return {
-            "status": FlowStatus.ABORTED.value,
-            "session_id": session.id,
-            "flow_name": session.flow_name,
-            "message": f"Флоу '{session.flow_name}' прерван по эскалации.",
-            "required_inputs": [],
-            "next_call": None,
-        }
+        _sync_orchestration_after_commit(root, session, renamed_from)
+        return _aborted_response(session, f"Флоу '{session.flow_name}' прерван по эскалации.")
 
     def abort_flow(
         self,
@@ -2204,13 +1347,21 @@ class FlowEngine:
         session = storage.get_session(session_id)
         if session is None:
             msg = f"Сессия '{session_id}' не найдена"
-            raise FlowNotFoundError(msg)
+            raise SessionNotFoundError(msg)
 
         if session.status in (FlowStatus.COMPLETED, FlowStatus.ABORTED):
             msg = f"Сессия уже находится в терминальном статусе '{session.status.value}'"
             raise FlowError(msg)
 
         session.status = FlowStatus.ABORTED
+        renamed_from = _maybe_update_orchestration(
+            session,
+            None,
+            root,
+            stage_id=session.current_stage_id,
+            notes=reason,
+            final_status_override="ABORTED",
+        )
         storage.update_session(
             session,
             history_events=[
@@ -2222,14 +1373,8 @@ class FlowEngine:
                 }
             ],
         )
-        return {
-            "status": FlowStatus.ABORTED.value,
-            "session_id": session.id,
-            "flow_name": session.flow_name,
-            "message": f"Флоу '{session.flow_name}' прерван: {reason}",
-            "required_inputs": [],
-            "next_call": None,
-        }
+        _sync_orchestration_after_commit(root, session, renamed_from)
+        return _aborted_response(session, f"Флоу '{session.flow_name}' прерван: {reason}")
 
     def get_flow_status(
         self,
@@ -2246,7 +1391,7 @@ class FlowEngine:
             target_session = storage.get_session(session_id)
             if target_session is None:
                 msg = f"Сессия '{session_id}' не найдена"
-                raise FlowNotFoundError(msg)
+                raise SessionNotFoundError(msg)
         else:
             branch = get_current_branch(root)
             active_sessions = storage.find_active_sessions(str(root), branch)
@@ -2293,13 +1438,20 @@ class FlowEngine:
             "history_count": len(history),
             "recent_events": history[-5:] if history else [],
         }
+        orch_summary = (
+            summarize_orchestration_state(target_session.context_data.get("orchestration"))
+            if isinstance(target_session.context_data, dict)
+            else None
+        )
+        if orch_summary is not None:
+            res["orchestration_state"] = orch_summary
         if target_session.status in (FlowStatus.COMPLETED, FlowStatus.ABORTED):
             res["required_inputs"] = []
             res["next_call"] = None
         elif target_session.status == FlowStatus.BLOCKED_ESCALATE:
             res["directive"] = (
                 "Сессия заблокирована Circuit Breaker. "
-                "Задайте уточняющий вопрос пользователю и вызовите resolve_flow_escalation."
+                "Задайте уточняющий вопрос пользователю и вызовите step_flow(action='escalation_resolve', resolution=...)."
             )
             res["required_inputs"] = ["resolution"]
             res["next_call"] = _compute_escalate_next_call(
@@ -2457,7 +1609,7 @@ def _resolve_session_id(
         raise AmbiguousSessionError(
             "Найдено несколько активных сессий. Укажите конкретный session_id."
         )
-    raise FlowNotFoundError(f"Активная сессия для {action} не найдена.")
+    raise SessionNotFoundError(f"Активная сессия для {action} не найдена.")
 
 
 def _handle_step_retry(
@@ -2478,7 +1630,7 @@ def _handle_step_retry(
     """
     session = store.get_session(session_id)
     if session is None:
-        raise FlowNotFoundError(f"Сессия '{session_id}' не найдена")
+        raise SessionNotFoundError(f"Сессия '{session_id}' не найдена")
 
     if session.status in (FlowStatus.COMPLETED, FlowStatus.ABORTED):
         raise FlowError(
@@ -2560,6 +1712,7 @@ def step_flow(
     skills_dir: Path | None = None,
     flow_options: dict[str, Any] | None = None,
     transition: str | None = None,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     """Единый фасад управления жизненным циклом и стейт-машиной сценария (Flow Runner).
 
@@ -2587,6 +1740,12 @@ def step_flow(
         bundler=bundler,
         skills_dir=skills_dir,
     )
+
+    _valid_actions = ("advance", "status", "retry", "abort", "escalation_resolve")
+    if action not in _valid_actions:
+        raise ValueError(
+            f"Неизвестное действие '{action}'. Допустимые значения: {list(_valid_actions)}"
+        )
 
     _validate_start_only_arguments(action, flow_options, transition)
 
@@ -2639,6 +1798,7 @@ def step_flow(
                 raise ValueError("transition недопустим при старте новой сессии")
             return engine.start_flow(
                 name=flow,
+                task_id=task_id,
                 project_root=root,
                 target=_validate_target(target),
                 flow_options=flow_options,

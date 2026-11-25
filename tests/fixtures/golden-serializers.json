@@ -23,12 +23,12 @@
     "bytes": 3025,
     "sha256": "ec8dd9b59afb5e64c95f90b3b6f3385279acf3f19f788d9165a8b3d80308074c"
   },
-  "audit/todo/backend/aud-backend-0492-sanitizer-короткий-токен-дб-отбрасываетс.md": {
-    "bytes": 1778,
-    "sha256": "0ac04fca789188d9f2e2cc096bdbb811a384bfe7f4169692ca31fdcda9a2d3a2"
+  "audit/done/backend/aud-backend-0492-sanitizer-короткий-токен-дб-отбрасываетс.md": {
+    "bytes": 1780,
+    "sha256": "a59b97c950f1cba40075d7c9f362334cb341f56d618de060b92b04f9249c04c2"
   },
-  "audit/todo/backend/aud-backend-a0c8-сохранять-activation-и-requires-stack-пр.md": {
-    "bytes": 942,
-    "sha256": "43cd2f45473eabee3b3c06f3dfcebdf5f707259d8001dc886db9ddbfd62814bf"
+  "audit/done/backend/aud-backend-a0c8-сохранять-activation-и-requires-stack-пр.md": {
+    "bytes": 944,
+    "sha256": "0463e787f20440ae12cda0c732d5c3942113cb0b12620596a0e8f297187b653e"
   }
 }

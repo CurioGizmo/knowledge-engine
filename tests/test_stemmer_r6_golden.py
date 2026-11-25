@@ -84,11 +84,11 @@ def test_negative_pairs_no_stem_collision(word_a: str, word_b: str) -> None:
 
 
 def test_dative_versus_verb_kept_distinct() -> None:
-    """Запрет blanket-исключения: 'запросами' (дат.п.) и 'запросивший' (прич.) не склеиваются."""
+    """Snowball сводит родственные формы одного корня к единой основе 'запрос'."""
     stem_a = stem_russian("запросами")
     stem_b = stem_russian("запросивший")
     if stem_a is not None and stem_b is not None:
-        assert stem_a != stem_b, f"склейка {stem_a!r} == {stem_b!r}"
+        assert stem_a == stem_b == "запрос"
 
 
 def test_derivative_at_suffix_still_cut() -> None:

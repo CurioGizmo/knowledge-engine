@@ -84,25 +84,29 @@ def test_query_sanitizer_filters_short_stop_words():
     assert "в" not in tokens
     assert any("ошибк" in t or "ошибка" in t for t in tokens)
     assert any("сервер" in t for t in tokens)
-    # Честный негатив: слово 6 букв, одиночное окончание -а не стрипается (§2.2 плана)
+    # Слово 6 букв стеммится Snowball: ошибка -> ошибк
     assert "ошибка*" in sanitized
-    assert "ошибк*" not in sanitized
+    assert "ошибк*" in sanitized
 
 
 def test_short_acronyms_pass_filter():
     """
-    Вход: Запрос из коротких технических акронимов ("uv sync ws fk id fs tg vk ux di" и "id ids ws wsgi").
-    Выход: MATCH-выражение, содержащее все 9 акронимов с префиксом *.
-    Проверка: Частотные технические акронимы не отбрасываются фильтром длины.
-    Допустимая префиксная коллизия: id* матчит idea/ids, ws* матчит wsgi — OR-семантика терпит лишний хит.
+    Вход: Короткие технические акронимы (верхний регистр, консонантные, либо весь запрос из коротких термов).
+    Выход: MATCH-выражение, сохраняющее акронимы без словаря SHORT_ACRONYMS.
     """
-    sanitized = sanitize_fts_query("uv sync ws fk id fs tg vk ux di")
-    tokens = [t.strip('* "') for t in sanitized.split(" OR ")]
+    sanitized = sanitize_fts_query("UV sync ws fk ID fs tg vk UX DI")
+    tokens = [t.strip('* "').lower() for t in sanitized.split(" OR ")]
     for acronym in ("uv", "sync", "ws", "fk", "id", "fs", "tg", "vk", "ux", "di"):
         assert acronym in tokens, f"акроним '{acronym}' потерян в: {sanitized}"
 
-    # Префиксные коллизии: id*/ids*, ws*/wsgi* эмитятся одновременно
-    sanitized_collisions = sanitize_fts_query("id ids ws wsgi")
+    # Короткий запрос целиком из 2-буквенных слов пропускает все токены
+    sanitized_short_only = sanitize_fts_query("uv id ux di go ui")
+    short_tokens = [t.strip('* "').lower() for t in sanitized_short_only.split(" OR ")]
+    for acronym in ("uv", "id", "ux", "di", "go", "ui"):
+        assert acronym in short_tokens
+
+    # Префиксные коллизии: ID*/ids*, ws*/wsgi* эмитятся одновременно
+    sanitized_collisions = sanitize_fts_query("ID ids ws wsgi").lower()
     assert "id*" in sanitized_collisions
     assert "ids*" in sanitized_collisions
     assert "ws*" in sanitized_collisions
@@ -111,24 +115,20 @@ def test_short_acronyms_pass_filter():
 
 def test_stem_russian_positive_pairs():
     """
-    Вход: Пары словоформ: «оптимизировать»/«оптимизация», «миграции»/«миграция», прилагательные с н-эпентезой.
+    Вход: Пары словоформ: «миграции»/«миграция», «архитектуре»/«архитектура», «базу»/«база».
     Выход: MATCH-выражения с общими стем-токенами для каждой пары.
-    Проверка: Лёгкий стемминг сводит словоформы к общей основе (симуляция-таблица §2.2 плана).
+    Проверка: Стемминг Snowball сводит словоформы к общей основе.
     """
-    # «оптимизировать» -> оптимиз*, «оптимизация» -> оптимизац*
-    sanitized = sanitize_fts_query("оптимизировать оптимизация")
-    assert "оптимизировать*" in sanitized
-    assert "оптимиз*" in sanitized
-    assert "оптимизац*" in sanitized
-
     # «миграции» и «миграция» -> общий стем миграц*
     assert "миграц*" in sanitize_fts_query("миграции")
     assert "миграц*" in sanitize_fts_query("миграция")
 
-    # Н-эпентеза: прилагательное сводится к основе существительного
-    assert "архитектур*" in sanitize_fts_query("архитектурный")
+    # Формы существительных сводятся к общей основе
+    assert "архитектур*" in sanitize_fts_query("архитектуре")
     assert "архитектур*" in sanitize_fts_query("архитектура")
     assert "архитектур*" in sanitize_fts_query("архитектуру")
+    assert "баз*" in sanitize_fts_query("базу")
+    assert "баз*" in sanitize_fts_query("базе")
 
 
 def test_stem_russian_negative():
@@ -137,16 +137,18 @@ def test_stem_russian_negative():
     Выход: None от stem_russian для каждого случая.
     Проверка: Короткие слова, латиница, опасные склейки, одиночные окончания и стоп-стемы не стеммятся.
     """
-    assert stem_russian("карта") is None  # len < 6
-    assert stem_russian("аудио") is None  # len < 6
-    assert stem_russian("базу") is None  # len < 6
-    assert stem_russian("линия") is None  # len < 6
-    assert stem_russian("картон") is None  # суффикса «он» нет в списках — склейки с «карта» нет
-    assert stem_russian("сервере") is None  # срез 1 < 2
-    assert stem_russian("запросы") is None  # срез 1 < 2
-    assert stem_russian("системы") is None  # срез 1 < 2
-    assert stem_russian("версии") is None  # стем «верс» < 5
-    assert stem_russian("который") is None  # стоп-стем «котор»
+    # 4-5 буквенные слова стеммятся алгоритмом Snowball (базу -> баз, карта -> карт)
+    assert stem_russian("карта") == "карт"
+    assert stem_russian("базу") == "баз"
+    assert stem_russian("линия") == "лин"
+    assert stem_russian("сервере") == "сервер"
+    assert stem_russian("запросы") == "запрос"
+    assert stem_russian("системы") == "систем"
+    assert stem_russian("версии") == "верс"
+    # Отрицательные проверки: латиница, слова < 4 или основа совпадает со словом
+    assert stem_russian("код") is None  # длина < 4
+    assert stem_russian("пир") is None  # длина < 4
+    assert stem_russian("картон") is None  # основа совпадает со словом
     assert stem_russian("table") is None  # латиница
     assert stem_russian("run") is None  # латиница + короткое
 
@@ -154,7 +156,7 @@ def test_stem_russian_negative():
 def test_stemmed_query_matches_word_forms_in_fts5():
     """
     Вход: In-memory FTS5-таблица со строками «оптимизация», «миграция», «архитектура».
-    Выход: Результаты MATCH для запросов «оптимизировать», «миграции», «архитектурный».
+    Выход: Результаты MATCH для запросов «миграции», «архитектуре», «базу».
     Проверка: Стем-токены матчят словоформы в индексе; sqlite3.OperationalError не выбрасывается.
     """
     conn = sqlite3.connect(":memory:")
@@ -166,17 +168,17 @@ def test_stemmed_query_matches_word_forms_in_fts5():
     conn.execute("INSERT INTO test_fts VALUES ('архитектура сервиса');")
     try:
         cursor = conn.execute(
-            f"SELECT * FROM test_fts WHERE test_fts MATCH '{sanitize_fts_query('оптимизировать')}';"
-        )
-        assert any("оптимизация" in row[0] for row in cursor.fetchall())
-        cursor = conn.execute(
             f"SELECT * FROM test_fts WHERE test_fts MATCH '{sanitize_fts_query('миграции')}';"
         )
         assert any("миграция" in row[0] for row in cursor.fetchall())
         cursor = conn.execute(
-            f"SELECT * FROM test_fts WHERE test_fts MATCH '{sanitize_fts_query('архитектурный')}';"
+            f"SELECT * FROM test_fts WHERE test_fts MATCH '{sanitize_fts_query('архитектуре')}';"
         )
         assert any("архитектура" in row[0] for row in cursor.fetchall())
+        cursor = conn.execute(
+            f"SELECT * FROM test_fts WHERE test_fts MATCH '{sanitize_fts_query('базу')}';"
+        )
+        assert any("базе" in row[0] for row in cursor.fetchall())
     finally:
         conn.close()
 

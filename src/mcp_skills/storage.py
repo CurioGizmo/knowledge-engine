@@ -22,8 +22,13 @@ from mcp_core.fuzzy import (
     short_acronym_matches,
 )
 from mcp_core.rerank import SearchHit, rerank_hits
-from mcp_core.sanitizer import extract_short_acronym_tokens, sanitize_fts_query, stem_russian
+from mcp_core.sanitizer import (
+    extract_short_acronym_tokens,
+    sanitize_fts_query,
+    stem_russian,
+)
 from mcp_core.schema_guard import FtsSpec, StorageSchemaSpec, ensure_storage_schema
+from mcp_core.text import is_technical_short_token
 from mcp_skills.categories import get_category_keywords
 from mcp_skills.models import SkillCard
 
@@ -433,25 +438,34 @@ def _section_search_text(meta: dict[str, Any], body: str) -> str:
 def _section_matches_query(meta: dict[str, Any], body: str, query: str) -> bool:
     """Шаг 3: единый helper совпадения секции с запросом.
 
-    OR-семантика (симметрично sanitize_fts_query: 'fastapi auth' находит секцию
-    с 'fastapi supports auth'): достаточно совпадения хотя бы одного терма.
-    Терм совпадает по префиксу С НАЧАЛА токена текста ('auth' -> 'authentication',
-    'thor' != 'authorization' — отличие от trigram-поиска карточек, который
-    находит 'authorization' по 'thor' как подстроку триграмм). Русские словоформы —
-    через stem_russian для обеих сторон.
+    OR-семантика: достаточно совпадения хотя бы одного терма.
+    Для термов < 3 символов требуется строгое точное совпадение (tok == term),
+    что исключает ложные срабатывания по предлогам («по», «за»).
+    Термы >= 3 символов совпадают по префиксу с начала токена.
+    Стоп-слова отфильтровываются.
     """
     if not query:
         return False
-    query_terms: set[str] = set()
-    for tok in re.findall(r"[\w]+", query.lower(), flags=re.UNICODE):
-        if len(tok) >= 2 or tok.isdigit():
-            query_terms.add(_normalize_query_token(tok))
-    if not query_terms:
+    raw_tokens = re.findall(r"[\w]+", query, flags=re.UNICODE)
+    has_long = any(len(t) >= 3 for t in raw_tokens)
+    valid_tokens = [
+        t.lower()
+        for t in raw_tokens
+        if len(t) >= 3 or t.isdigit() or is_technical_short_token(t, allow_all_len2=not has_long)
+    ]
+    if not valid_tokens:
         return False
-    for tok in re.findall(r"[\w]+", _section_search_text(meta, body).lower(), flags=re.UNICODE):
+
+    query_terms = {_normalize_query_token(t) for t in valid_tokens}
+    search_tokens = re.findall(r"[\w]+", _section_search_text(meta, body).lower(), flags=re.UNICODE)
+    for tok in search_tokens:
+        tok_lower = tok.lower()
         norm = _normalize_query_token(tok)
         for term in query_terms:
-            if norm.startswith(term) or tok.lower().startswith(term):
+            if len(term) < 3:
+                if norm == term or tok_lower == term:
+                    return True
+            elif norm.startswith(term) or tok_lower.startswith(term):
                 return True
     return False
 
@@ -588,12 +602,8 @@ def _collect_short_acronym_skills(
         if sname in existing_names or sname in fuzzy_cards:
             continue
         doc_blob = f"{sr['name']} {sr['title']} {sr['description']} {sr['stack']}"
-        doc_lower = doc_blob.lower()
         token_hit = short_acronym_matches(short_tokens, doc_blob)
-        # Подстрочный канал: короткий акроним как подслово (граница токена или
-        # часть составного токена 'db_backup'/'pr-review') в тексте полей.
-        substr_hit = any(f" {st} " in f" {doc_lower} " or st in doc_lower for st in short_tokens)
-        if not (token_hit or substr_hit):
+        if not token_hit:
             continue
         meta = json.loads(sr["metadata"])
         if stack_set is not None and not _matches_project_stack(SkillCard(**meta), stack_set):
@@ -673,7 +683,7 @@ def _rerank_and_fuzzy_skills(
         else len(match_rows)
     )
 
-    tokens_3 = [t for t in re.findall(r"[A-Za-zА-Яа-я0-9_]+", query) if len(t) >= 3]
+    tokens_3 = [t for t in re.findall(r"[A-Za-zА-Яа-яЁё0-9_]+", query) if len(t) >= 3]
     fuzzy_cards: dict[str, tuple[SkillCard, float]] = {}
 
     if (len(match_rows) < limit or app_match_count < limit) and tokens_3:

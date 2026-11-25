@@ -6,14 +6,13 @@ category: backend
 priority: suggestion
 autonomy: high
 complexity: M
-status: planned
+status: completed
 target_file: src/mcp_core/sanitizer.py
 symbol: sanitize_fts_query
 task_id: mcp-simulation-skills
 created_at: '2026-10-12'
-updated_at: '2026-10-12'
+updated_at: '2026-11-24'
 ---
-
 # aud-backend-0492: sanitizer: короткий токен «дб» отбрасывается (нет в SHORT_ACRONYMS); search_skills type=all с query не возвращает flows
 
 ## ❌ Симптом
@@ -24,3 +23,6 @@ updated_at: '2026-10-12'
 
 ## 🛠 Предлагаемое решение
 Добавить перевёрнутые/вариантные акронимы (дб, кд, пи и т.п.) либо не отбрасывать короткие токены при их малом количестве; для type=all объединять результаты скиллов и flows (compact-представление flows). Тесты на оба кейса.
+
+## ✅ Фактическое решение (Actual resolution)
+- 2026-11-25: После ребейза на `main` (`AUDIT-FIX-P2`) короткий токен «дб» обрабатывается алгоритмическим детектором `is_technical_short_token` в `src/mcp_core/text.py` (согласные без гласных, `SHORT_ACRONYMS` заменён на алгоритмическую детекцию), а `search_skills(type="all", query=...)` возвращает `flows` и `flows_count` в `src/mcp_skills/server.py`. Покрыто тестами.

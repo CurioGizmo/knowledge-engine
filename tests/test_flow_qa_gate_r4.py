@@ -12,7 +12,7 @@
 
 from pathlib import Path
 
-from mcp_skills.flow_engine import GATE_REGISTRY
+from mcp_skills.flow_engine import VALIDATOR_REGISTRY
 from mcp_skills.models import FlowSession, FlowStage, FlowStageMeta
 
 
@@ -29,14 +29,14 @@ def _make_session_stage(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
     return session, stage
 
 
 def test_r4_table_banana_status_is_blocker(tmp_path: Path):
     """Воспроизведение R4-1: статус BANANA в таблице → блокер (не молча пройден)."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session, stage = _make_session_stage(tmp_path)
 
     report = """# Отчёт приёмки
@@ -57,7 +57,7 @@ def test_r4_table_banana_status_is_blocker(tmp_path: Path):
 
 def test_r4_table_pending_status_is_blocker(tmp_path: Path):
     """Воспроизведение R4-1: статус PENDING в таблице → блокер."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session, stage = _make_session_stage(tmp_path)
 
     report = """# Отчёт приёмки
@@ -78,7 +78,7 @@ def test_r4_table_pending_status_is_blocker(tmp_path: Path):
 
 def test_r4_english_evidence_column_recognized(tmp_path: Path):
     """R4-3: английская колонка Evidence классифицируется как evidence, не как id."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session, stage = _make_session_stage(tmp_path)
 
     report = """# QA Report
@@ -100,7 +100,7 @@ def test_r4_english_evidence_column_recognized(tmp_path: Path):
 
 def test_r4_mixed_qa_passed_with_pending_row_fails(tmp_path: Path):
     """R4-4: общий QA_PASSED + одна PENDING-строка → fail (смешанный случай)."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session, stage = _make_session_stage(tmp_path)
 
     report = """# Отчёт приёмки
@@ -126,7 +126,7 @@ def test_r4_freeform_banana_scenario_is_blocker(tmp_path: Path):
     Freeform-сценарий обязан содержать распознанный валидный статус; общий
     QA_PASSED не оправдывает строку без статуса/с невалидным статусом.
     """
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session, stage = _make_session_stage(tmp_path)
 
     report = """# Отчёт приёмки
@@ -149,7 +149,7 @@ def test_r4_freeform_banana_scenario_is_blocker(tmp_path: Path):
 
 def test_r4_freeform_valid_statuses_pass(tmp_path: Path):
     """R4-5: валидные статусы в freeform проходят (УСПЕШНО, PASS, evidence)."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session, stage = _make_session_stage(tmp_path)
     report = """# Отчёт приёмки
 
@@ -165,3 +165,38 @@ def test_r4_freeform_valid_statuses_pass(tmp_path: Path):
     res = gate_fn(session, stage, report, tmp_path, None)
     assert res.passed is True, res.blockers
     assert res.blockers == []
+
+
+def test_r4_freeform_zero_tests_failed_passes_while_real_failure_blocks(tmp_path: Path):
+    """'0 tests FAILED' в факте не вызывает ложный блокер, но реальный FAILED блокирует."""
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
+    session, stage = _make_session_stage(tmp_path)
+
+    passing_report = """# Отчёт приёмки
+
+**Вердикт:** QA_PASSED
+**Сессия:** qa-session-r4
+
+### Сценарий TC-1: Прогон pytest
+- Ожидание: Все тесты проходят без ошибок.
+- Факт: 42 tests passed, 0 tests FAILED, Failed: 0.
+- Результат: PASS
+- Доказательство: tests/output.log
+"""
+    res_ok = gate_fn(session, stage, passing_report, tmp_path, None)
+    assert res_ok.passed is True, res_ok.blockers
+
+    failing_report = """# Отчёт приёмки
+
+**Вердикт:** QA_PASSED
+**Сессия:** qa-session-r4
+
+### Сценарий TC-1: Прогон pytest
+- Ожидание: Все тесты проходят без ошибок.
+- Факт: 40 tests passed, 2 tests FAILED.
+- Результат: PASS
+- Доказательство: tests/output.log
+"""
+    res_fail = gate_fn(session, stage, failing_report, tmp_path, None)
+    assert res_fail.passed is False
+    assert any("FAILED" in b for b in res_fail.blockers)

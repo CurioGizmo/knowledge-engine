@@ -21,6 +21,9 @@ __all__ = [
     "PlanArtifact",
     "PlanStatus",
     "PlanStep",
+    "PlanVersionMetadata",
+    "PlanVersionsResponse",
+    "RestorePlanVersionResponse",
     "ReviewArtifact",
     "ReviewComment",
     "ReviewVerdict",
@@ -226,6 +229,8 @@ class PlanArtifact(BaseModel):
     title: str
     category: str = "general"
     status: PlanStatus = PlanStatus.DISCUSSED
+    plan_version: int = 1
+    definition_sha256: str | None = None
     pr_url: str | None = None
     target_files: list[str] = Field(default_factory=list)
     related_debts: list[str] = Field(default_factory=list)
@@ -287,6 +292,20 @@ class ReviewArtifact(BaseModel):
         return str(v)
 
 
+class PlanVersionMetadata(BaseModel):
+    """Метаданные снимка версии плана."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    version: int
+    parent_version: int | None = None
+    created_at_utc: str
+    reason: str
+    source: Literal["mcp", "manual", "restore"]
+    restored_from: int | None = None
+    definition_sha256: str
+
+
 class StepPlanResponse(BaseModel):
     """Ответ инструмента step_plan."""
 
@@ -298,6 +317,7 @@ class StepPlanResponse(BaseModel):
     status_changed: bool = False
     new_plan_status: PlanStatus | None = None
     file_path: str
+    plan_version: int = 1
 
 
 class TaskContextResponse(BaseModel):
@@ -310,6 +330,43 @@ class TaskContextResponse(BaseModel):
     plan: dict[str, Any] | None = None
     reviews: list[dict[str, Any]] = Field(default_factory=list)
     debts: list[dict[str, Any]] = Field(default_factory=list)
+    plan_state_etag: str | None = None
+    sync_error: str | None = None
+
+
+class PlanVersionsResponse(BaseModel):
+    """Ответ инструмента get_plan_versions."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    task_id: str
+    plan_id: str
+    object_type: Literal["plan_card"] = "plan_card"
+    current_version: int | None = None
+    total_count: int | None = None
+    versions: list[PlanVersionMetadata] = Field(default_factory=list)
+    version: int | None = None
+    metadata: PlanVersionMetadata | None = None
+    raw_markdown: str | None = None
+    compare_to: int | None = None
+    diff: str | None = None
+
+
+class RestorePlanVersionResponse(BaseModel):
+    """Ответ инструмента restore_plan_version."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: Literal["restored"] = "restored"
+    task_id: str
+    plan_id: str
+    new_version: int
+    restored_from: int
+    plan_status: str = "discussed"
+    progress_reset: bool = False
+    object_type: Literal["plan_card"] = "plan_card"
+    message: str = "Объектом снимка является карточка плана (.agents/plans/...)"
+    file_path: str | None = None
 
 
 class KnownDebtCheckResponse(BaseModel):

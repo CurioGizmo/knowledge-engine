@@ -1242,7 +1242,7 @@
   "query": "почему падает тест",
   "relevant_ids": [
    "platform-e2-skills-type-all",
-   "aud-backend-a4db"
+   "aud-backend-aa59"
   ],
   "notes": "Русско-английский разговорный запрос (из бенчмарка). ВАЖНО: слово «почему» НЕ должно матчить ВСЕ карточки (дефект c77b: русские секционные заголовки в body). Релевантны карточки про падение тестов.",
   "synthetic": false,
@@ -1251,7 +1251,7 @@
     "platform-e2-skills-type-all"
    ],
    "audit": [
-    "aud-backend-a4db"
+    "aud-backend-aa59"
    ]
   }
  },

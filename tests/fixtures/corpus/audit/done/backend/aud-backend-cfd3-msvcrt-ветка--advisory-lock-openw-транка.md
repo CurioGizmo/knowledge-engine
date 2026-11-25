@@ -6,13 +6,12 @@ category: backend
 priority: suggestion
 autonomy: high
 complexity: L
-status: planned
+status: completed
 target_file: src/mcp_audit/synchronizer.py
 symbol: _advisory_lock
 created_at: '2026-11-09'
-updated_at: '2026-11-09'
+updated_at: '2026-11-15'
 ---
-
 # aud-backend-cfd3: msvcrt-ветка _advisory_lock: open(\"w\") транкатирует lock-файл и LK_LOCK-таймаут ~10с не документирован
 
 ## ❌ Симптом
@@ -23,3 +22,6 @@ _advisory_lock открывает lock-файл через open(\"w\") (synchron
 
 ## 🛠 Предлагаемое решение
 Открывать lock-файл без обрезки: open(\"a\") или os.open(path, O_CREAT|O_RDWR) в обеих ветках (fcntl и msvcrt). Дополнить docstring: «Windows-ветка msvcrt.LK_LOCK ждёт до ~10 сек и бросает OSError; при длительной конкуренции это ошибка, а не бесконечное ожидание».
+
+## ✅ Фактическое решение (Actual resolution)
+- 2026-11-15: Лок-файлы открываются без обрезки через os.open(lock_path, os.O_CREAT | os.O_RDWR) в обеих ветках fcntl и msvcrt, исключая гонку обрезки; документирован таймаут msvcrt LK_LOCK

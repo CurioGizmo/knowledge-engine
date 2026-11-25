@@ -6,14 +6,13 @@ category: backend
 priority: important
 autonomy: medium
 complexity: M
-status: planned
+status: completed
 target_file: src/mcp_skills/server.py
 symbol: load_skill
 task_id: mcp-simulation-skills
 created_at: '2026-10-12'
-updated_at: '2026-10-12'
+updated_at: '2026-11-25'
 ---
-
 # aud-backend-fe8e: load_skill: параметр stack трактуется как имена слотов, а не технологии — тихая деградация и утечка сырых SLOT-маркеров в контент
 
 ## ❌ Симптом
@@ -24,3 +23,6 @@ updated_at: '2026-10-12'
 
 ## 🛠 Предлагаемое решение
 Валидировать stack/touches против card.available_slots с явной ошибкой+списком допустимых слотов; при stack=None заполнять все available_slots из detected_stack+default.md; исправить fallback-сообщение на имя слота; добавить в ответ detected_stack/slots_filled для наблюдаемости; синхронизировать описание инструмента.
+
+## ✅ Фактическое решение (Actual resolution)
+- 2026-11-25: Исправлено ранее: load_skill в src/mcp_skills/server.py:1002-1136 и SlotCompiler.assemble_result (slot_compiler.py:271-281,491) разделяют stack (технологии) и touches (слоты), автодетектуют стек при stack=None и зачищают невостребованные маркеры.

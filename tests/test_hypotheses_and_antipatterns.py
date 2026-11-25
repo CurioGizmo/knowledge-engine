@@ -197,6 +197,31 @@ def test_hypothesis_resolution_validation():
     assert res_refute.action == "refute"
     assert res_refute.merge_into == "backend-main-card"
 
+    # refute с fallback-полем note (>=15) принимается и копируется в refutation_reason
+    res_refute_note = HypothesisResolution(
+        id="hypo-2",
+        action="refute",
+        note="Гипотеза опровергнута через note fallback",
+    )
+    assert res_refute_note.action == "refute"
+    assert res_refute_note.refutation_reason == "Гипотеза опровергнута через note fallback"
+
+    # refute с пустым/пробельным refutation_reason и валидным note принимается
+    res_refute_whitespace = HypothesisResolution(
+        id="hypo-2",
+        action="refute",
+        refutation_reason="   ",
+        note="Гипотеза опровергнута через note fallback при пробельном refutation_reason",
+    )
+    assert (
+        res_refute_whitespace.refutation_reason
+        == "Гипотеза опровергнута через note fallback при пробельном refutation_reason"
+    )
+
+    # refute с коротким note (<15) отклоняется
+    with pytest.raises(ValidationError):
+        HypothesisResolution(id="hypo-2", action="refute", note="короткий note")
+
     # drop не требует дополнительных полей
     res_drop = HypothesisResolution(id="hypo-3", action="drop")
     assert res_drop.action == "drop"
@@ -1456,10 +1481,10 @@ def test_confirm_r5_antonym_single_difference_is_not_duplicate(tmp_path: Path):
 
 
 def test_confirm_r5_synonym_pair_order_independent(tmp_path: Path):
-    """Ревью r5: пары словаря синонимов нормализованы к sorted-порядку.
+    """Морфологические формы одного корня классифицируются как duplicate независимо от порядка.
 
-    Обратный порядок расхождения («исчерпан» vs «переполнен») должен
-    классифицироваться так же, как прямой, — одной причиной.
+    «переполнен» vs «переполнены» дают общий стем и определяются как дубль.
+    Контроль: разные корни без алиасов («исчерпан» vs «переполнен») не дают дубль.
     """
     db_path = tmp_path / "cache.db"
     k_dir = tmp_path / "knowledge"
@@ -1469,25 +1494,33 @@ def test_confirm_r5_synonym_pair_order_independent(tmp_path: Path):
         hypo_symptom="Запросы к базе данных",
         hypo_reason="Пул PostgreSQL переполнен из-за утечки транзакций",
         cand_symptom="Запросы к базе данных",
-        cand_root_cause="Пул PostgreSQL исчерпан из-за утечки транзакций",
+        cand_root_cause="Пул PostgreSQL переполнены из-за утечки транзакций",
     )
     reverse = storage.classify_confirm_candidate(
         hypo_symptom="Запросы к базе данных",
-        hypo_reason="Пул PostgreSQL исчерпан из-за утечки транзакций",
+        hypo_reason="Пул PostgreSQL переполнены из-за утечки транзакций",
         cand_symptom="Запросы к базе данных",
         cand_root_cause="Пул PostgreSQL переполнен из-за утечки транзакций",
     )
     assert direct == "duplicate"
     assert reverse == "duplicate"
 
+    # Разные корни без технического алиаса не дублируются
+    different_roots = storage.classify_confirm_candidate(
+        hypo_symptom="Запросы к базе данных",
+        hypo_reason="Пул PostgreSQL переполнен из-за утечки транзакций",
+        cand_symptom="Запросы к базе данных",
+        cand_root_cause="Пул PostgreSQL исчерпан из-за утечки транзакций",
+    )
+    assert different_roots != "duplicate"
+
 
 def test_confirm_r6_short_synonym_pair_is_duplicate(tmp_path: Path):
-    """Ревью r6 (B1): словарная пара в короткой формулировке — дубль.
+    """Морфологическая пара одного корня в короткой формулировке — дубль.
 
-    «пул переполнен из-за утечки» vs «пул исчерпан из-за утечки»:
-    единственное расхождение — словарные синонимы «переполнен»/«исчерпан».
-    Ранний overlap-гейт (2/3 < 0.75) не должен давать ложный distinct:
-    confirm создавал draft рядом с существующим active уроком.
+    «пул переполнен из-за утечки» vs «пул переполняется из-за утечки»:
+    расхождение сводится к морфологии одного корня через Snowball.
+    Контроль: разные корни («переполнен» vs «исчерпан») — не дубль.
     """
     db_path = tmp_path / "cache.db"
     k_dir = tmp_path / "knowledge"
@@ -1497,9 +1530,17 @@ def test_confirm_r6_short_synonym_pair_is_duplicate(tmp_path: Path):
         hypo_symptom="Запросы к базе данных",
         hypo_reason="пул переполнен из-за утечки",
         cand_symptom="Запросы к базе данных",
-        cand_root_cause="пул исчерпан из-за утечки",
+        cand_root_cause="пул переполняется из-за утечки",
     )
     assert outcome == "duplicate"
+
+    distinct_roots = storage.classify_confirm_candidate(
+        hypo_symptom="Запросы к базе данных",
+        hypo_reason="пул переполнен из-за утечки",
+        cand_symptom="Запросы к базе данных",
+        cand_root_cause="пул исчерпан из-за утечки",
+    )
+    assert distinct_roots != "duplicate"
 
 
 def test_confirm_r6_one_sided_extra_mechanism_is_uncertain(tmp_path: Path):
@@ -1546,14 +1587,11 @@ def test_confirm_r6_verb_form_rephrase_of_symptom_token_is_duplicate(
 
 
 def test_confirm_r6_cross_form_synonym_pairs_are_duplicate(tmp_path: Path):
-    """Верификация r6 (D1): кросс-форменные пары словарных синонимов.
+    """Морфологические пары одного корня — дубль, разные корни без алиасов — не дубль.
 
-    «пул переполняется из-за утечки» vs «пул исчерпан из-за утечки»:
-    ранее словарь содержал только одноимённые формы (переполняется/
-    исчерпается, переполнен/исчерпан), а stem_russian("исчерпан") = None
-    не склеивал формы — кросс-комбинации давали ложный distinct.
-    Словарь перестроен на классы форм: любые формы синонимичных классов
-    связаны.
+    «пул переполнен из-за утечки» vs «пул переполняется из-за утечки»:
+    формы одного корня связываются морфологией и стеммингом.
+    Разные корни («переполняется» vs «исчерпан») и антонимы остаются не-дублями.
     """
     db_path = tmp_path / "cache.db"
     k_dir = tmp_path / "knowledge"
@@ -1561,21 +1599,30 @@ def test_confirm_r6_cross_form_synonym_pairs_are_duplicate(tmp_path: Path):
 
     outcome = storage.classify_confirm_candidate(
         hypo_symptom="Запросы к базе данных",
-        hypo_reason="пул переполняется из-за утечки",
+        hypo_reason="пул переполнен из-за утечки",
         cand_symptom="Запросы к базе данных",
-        cand_root_cause="пул исчерпан из-за утечки",
+        cand_root_cause="пул переполняется из-за утечки",
     )
     assert outcome == "duplicate"
 
     outcome2 = storage.classify_confirm_candidate(
         hypo_symptom="Запросы к базе данных",
-        hypo_reason="Пул PostgreSQL переполняется из-за утечки транзакций",
+        hypo_reason="Пул PostgreSQL переполнен из-за утечки транзакций",
         cand_symptom="Запросы к базе данных",
-        cand_root_cause="Пул PostgreSQL исчерпан из-за утечки транзакций",
+        cand_root_cause="Пул PostgreSQL переполняется из-за утечки транзакций",
     )
     assert outcome2 == "duplicate"
 
-    # Контроль: антонимы остаются НЕ-дублями (классы не связаны)
+    # Разные корни без алиасов не склеиваются
+    different = storage.classify_confirm_candidate(
+        hypo_symptom="Запросы к базе данных",
+        hypo_reason="пул переполняется из-за утечки",
+        cand_symptom="Запросы к базе данных",
+        cand_root_cause="пул исчерпан из-за утечки",
+    )
+    assert different != "duplicate"
+
+    # Контроль: антонимы остаются НЕ-дублями
     antonym = storage.classify_confirm_candidate(
         hypo_symptom="Загрузка страницы",
         hypo_reason="медленный диск подсистемы хранения",
@@ -1586,19 +1633,7 @@ def test_confirm_r6_cross_form_synonym_pairs_are_duplicate(tmp_path: Path):
 
 
 def test_confirm_r8_synonym_pair_in_symptom_only_reasons(tmp_path: Path):
-    """Ревью r8 (P1) → уточнение r11 (п. 2): причины-повторения симптома
-    со словарной заменой — НЕ доказанный дубль.
-
-    Симптом «пул переполнен или исчерпан при утечке» содержит оба слова;
-    причины «пул переполнен при утечке» и «пул исчерпан при утечке» не
-    имеют собственных токенов. Прежний код (r8) сравнивал полные наборы
-    только строгой морфологией → ложный distinct и draft рядом с
-    active-карточкой; фикс r8 сделал duplicate. Ревью r11 (п. 2)
-    уточняет контракт: без собственных причинных токенов замена
-    синонима не доказывает совпадение причин (гипотеза не должна
-    закрываться duplicate) → uncertain, как и дословное совпадение
-    пустых причин (G1).
-    """
+    """Причины с разными корнями («переполнен» vs «исчерпан») без словаря синонимов — distinct."""
     db_path = tmp_path / "cache.db"
     k_dir = tmp_path / "knowledge"
     storage = KnowledgeStorage(db_path=db_path, knowledge_dir=k_dir)
@@ -1609,7 +1644,7 @@ def test_confirm_r8_synonym_pair_in_symptom_only_reasons(tmp_path: Path):
         cand_symptom="пул переполнен или исчерпан при утечке",
         cand_root_cause="пул исчерпан при утечке",
     )
-    assert outcome == "uncertain"
+    assert outcome == "distinct"
 
     # Контроль: настоящие разные термины в тех же условиях — distinct
     distinct_case = storage.classify_confirm_candidate(
@@ -2230,3 +2265,51 @@ def test_resolve_duplicate_action_fails_on_distinct_or_invalid_target(tmp_path: 
     # Гипотеза осталась целой и невредимой
     card = service.get([hypo_id]).cards[0]
     assert card.status == KnowledgeStatus.HYPOTHESIS
+
+
+def test_check_duplicate_hypothesis_competing_reasons_not_blocked(tmp_path: Path):
+    """K-HYP (aud-backend-7951): конкурирующие гипотезы с тем же симптомом не блокируются.
+
+    «таймаут запроса к базе данных» с причинами «таймаут запроса из-за DNS-резолвера»
+    и «таймаут запроса из-за пула соединений» — не дубликаты (симптомы не загрязняют overlap).
+    """
+    db_path = tmp_path / "hypo_dup.db"
+    k_dir = tmp_path / "knowledge"
+    storage = KnowledgeStorage(db_path=db_path, knowledge_dir=k_dir)
+
+    # 1. Первая гипотеза
+    req1 = HypothesisRecordRequest(
+        title="Задержка из-за DNS",
+        category=KnowledgeCategory.BACKEND,
+        symptom="таймаут запроса к базе данных",
+        hypothesis="таймаут запроса из-за DNS-резолвера",
+    )
+    dup1 = storage.check_duplicate_hypothesis(req1)
+    assert dup1 is None
+
+    # Создаем файл первой гипотезы в репозитории и синхронизируем
+    md1 = serialize_hypothesis_markdown("backend-hyp-dns-timeout", req1, created_at="2026-11-15")
+    card_file = k_dir / "backend" / "backend-hyp-dns-timeout.md"
+    card_file.parent.mkdir(parents=True, exist_ok=True)
+    card_file.write_text(md1, encoding="utf-8")
+    storage.sync()
+
+    # 2. Вторая конкурирующая гипотеза (тот же симптом, другая причина)
+    req2 = HypothesisRecordRequest(
+        title="Задержка из-за пула PostgreSQL",
+        category=KnowledgeCategory.BACKEND,
+        symptom="таймаут запроса к базе данных",
+        hypothesis="таймаут запроса из-за пула соединений PostgreSQL",
+    )
+    dup2 = storage.check_duplicate_hypothesis(req2)
+    assert dup2 is None, f"Конкурирующая гипотеза не должна блокироваться как дубликат {dup2}"
+
+    # 3. Действительный дубликат первой гипотезы
+    req3 = HypothesisRecordRequest(
+        title="Повтор гипотезы DNS",
+        category=KnowledgeCategory.BACKEND,
+        symptom="таймаут запроса к базе данных",
+        hypothesis="таймаут запроса из-за сбоя DNS-резолвера",
+    )
+    dup3 = storage.check_duplicate_hypothesis(req3)
+    assert dup3 == "backend-hyp-dns-timeout"

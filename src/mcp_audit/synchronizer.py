@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import logging
-from datetime import datetime
+import os
+import re
+import secrets
+import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +28,7 @@ from mcp_audit.models import (
     PlanArtifact,
     PlanStatus,
     PlanStep,
+    PlanVersionMetadata,
     ReviewArtifact,
     StepPlanResponse,
 )
@@ -29,18 +36,27 @@ from mcp_audit.parser import (
     FRONTMATTER_SPLIT_REGEX,
     append_actual_resolution_to_markdown,
     append_steps_to_plan_markdown,
+    compute_plan_definition_projection,
+    compute_plan_definition_sha256,
     extract_actual_resolution_lines,
     mutate_plan_step_in_markdown,
     parse_audit_markdown,
     parse_plan_markdown,
     parse_review_markdown,
+    replace_goal_section_in_markdown,
+    replace_steps_in_markdown,
     serialize_audit_markdown,
     serialize_plan_markdown,
     serialize_review_markdown,
     set_actual_resolution_lines,
 )
 from mcp_audit.storage import AuditStorage
-from mcp_core.card_codec import FrontmatterError, rebuild_card
+from mcp_core.card_codec import (
+    FrontmatterError,
+    dump_frontmatter,
+    rebuild_card,
+    split_frontmatter,
+)
 from mcp_core.sanitizer import normalize_category_slug, sanitize_task_id, title_to_slug
 from mcp_core.sync import BaseSynchronizer, _atomic_write_text, move_card
 
@@ -49,44 +65,72 @@ __all__ = ["AuditSynchronizer"]
 logger = logging.getLogger("mcp_audit.synchronizer")
 
 
+_local_locks = threading.local()
+
+
 @contextlib.contextmanager
 def _advisory_lock(lock_path: Path):
-    """Advisory lock for safe plan file mutations.
+    """Межпроцессный рекомендательный (advisory) лок для безопасных файловых мутаций.
 
-    Guarantees (documented, plan C item 3):
-    - On POSIX with ``fcntl`` available, an exclusive ``flock`` is held for the
-      whole ``with`` block, so concurrent writers serialize on the same lock path.
-    - On platforms without ``fcntl`` (Windows), an exclusive lock is acquired
-      through ``msvcrt.locking`` over a dedicated region of the lock file:
-      concurrent writers still serialize on the same lock path (ревью шага 3:
-      прежний no-op позволял параллельные дубли в Anti-Spam Gate).
-    - The lock file is NOT unlinked after unlock: an unlink would let a waiter
-      keep the old inode while a new writer opens a fresh file, breaking the
-      guarantee. Lock files are tiny and left in place (stable name by ID).
+    Гарантии:
+    - На POSIX-платформах (при наличии fcntl) удерживается эксклюзивный flock на время всего блока with.
+    - На Windows блокировка осуществляется через msvcrt.locking эксклюзивного региона файла
+      с таймаутом ожидания до ~10 секунд (10 попыток с интервалом 1 с).
+    - Файл лока открывается без усечения (os.O_CREAT | os.O_RDWR).
+    - Файл лока не удаляется после снятия блокировки для предотвращения гонок дескрипторов.
+    - Лок реентерабелен в рамках одного потока для одного канонического пути.
+    - При отсутствии fcntl и msvcrt выполняется как no-op без взаимного исключения.
     """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    canonical_key = str(lock_path.resolve())
+
+    if not hasattr(_local_locks, "held"):
+        _local_locks.held = {}
+
+    if canonical_key in _local_locks.held:
+        _local_locks.held[canonical_key]["count"] += 1
+        try:
+            yield
+        finally:
+            _local_locks.held[canonical_key]["count"] -= 1
+            if _local_locks.held[canonical_key]["count"] == 0:
+                del _local_locks.held[canonical_key]
+        return
+
     if fcntl is None:
         msvcrt = _import_msvcrt()
         if msvcrt is None:
             # Neither fcntl nor msvcrt: documented no-op, no mutual exclusion guarantee.
             yield
             return
-        with lock_path.open("w", encoding="utf-8") as lock_file:
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            _local_locks.held[canonical_key] = {"count": 1, "fd": fd}
             try:
                 yield
             finally:
+                _local_locks.held.pop(canonical_key, None)
                 with contextlib.suppress(OSError):
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(fd)
         return
-    with lock_path.open("w", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        _local_locks.held[canonical_key] = {"count": 1, "fd": fd}
         try:
             yield
         finally:
+            _local_locks.held.pop(canonical_key, None)
             with contextlib.suppress(OSError):
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _import_msvcrt():
@@ -103,12 +147,113 @@ def _import_msvcrt():
         return None
 
 
+def _normalize_step_title(t: str) -> str:
+    """Нормализует заголовок шага для структурного сравнения."""
+    cleaned = str(t).strip()
+    if cleaned.startswith(("- [ ]", "- [x]", "- [X]", "* [ ]", "* [x]", "* [X]")):
+        cleaned = cleaned[5:].strip()
+    return re.sub(r"^\d+\.\s*", "", cleaned).strip()
+
+
+def _get_step_title_str(s: Any) -> str:
+    if isinstance(s, PlanStep):
+        return s.title
+    if isinstance(s, dict):
+        return str(s.get("title") or "")
+    return str(s)
+
+
+def _steps_structure_matches(steps_a: list[Any], steps_b: list[Any]) -> bool:
+    """Сравнивает названия и порядок шагов двух списков."""
+    if len(steps_a) != len(steps_b):
+        return False
+    titles_a = [_normalize_step_title(_get_step_title_str(s)) for s in steps_a]
+    titles_b = [_normalize_step_title(_get_step_title_str(s)) for s in steps_b]
+    return titles_a == titles_b
+
+
 def _plan_lock_path(sync: AuditSynchronizer, artifact_id: str, plan_file: Path | None) -> Path:
     """Stable per-artifact lock path (independent of active/completed directory)."""
     _ = plan_file  # file path не участвует: имя лока стабильно по artifact_id
     lock_dir = Path(sync.plans_dir) / ".locks"
     clean_id = sanitize_task_id(artifact_id) or artifact_id
     return lock_dir / f"{clean_id}.lock"
+
+
+def _atomic_write_snapshot(target_path: Path, content: str) -> None:
+    """Атомарно записывает неизменяемый снимок через temp+rename без overwrite."""
+    if target_path.exists():
+        raise FileExistsError(f"Snapshot already exists and is immutable: {target_path}")
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = target_path.with_name(f".{target_path.name}.tmp.{secrets.token_hex(4)}")
+    try:
+        temp_file.write_text(content, encoding="utf-8")
+        if target_path.exists():
+            raise FileExistsError(f"Snapshot already exists and is immutable: {target_path}")
+        temp_file.replace(target_path)
+    except Exception:
+        temp_file.unlink(missing_ok=True)
+        raise
+
+
+def _verify_plan_version_history(version_dir: Path, plan_id: str, plan_version: int) -> None:
+    """Проверяет непрерывность и целостность исторической цепочки снимков планов."""
+    for v in range(1, plan_version + 1):
+        v_path = version_dir / f"v{v:04d}.md"
+        if not v_path.exists():
+            raise ValueError(
+                f"VERSION_HISTORY_CORRUPTED: снимок версии {v} отсутствует ({v_path}) "
+                f"для плана '{plan_id}'"
+            )
+        try:
+            raw_snap = v_path.read_text(encoding="utf-8")
+            meta_dict, snap_body = split_frontmatter(raw_snap)
+            if not meta_dict:
+                raise ValueError("Отсутствуют метаданные")
+            PlanVersionMetadata.model_validate(meta_dict)
+            parse_plan_markdown(snap_body)
+        except Exception as err:
+            raise ValueError(
+                f"VERSION_HISTORY_CORRUPTED: снимок версии {v} повреждён "
+                f"для плана '{plan_id}': {err}"
+            ) from err
+
+
+def _resolve_restore_progress(
+    current_plan: PlanArtifact,
+    target_plan: PlanArtifact,
+    version: int,
+    reset_progress: bool,
+    actual_etag: str,
+) -> None:
+    """Проверяет конфликты прогресса и применяет перенос или сброс отметок выполнения."""
+    has_progress = any(s.completed or s.note for s in current_plan.steps)
+    steps_match = _steps_structure_matches(target_plan.steps, current_plan.steps)
+
+    if has_progress and not steps_match and not reset_progress:
+        preview_curr = "\n".join(
+            f"- [{'x' if s.completed else ' '}] {s.index}. {s.title}"
+            + (f" (note: {s.note})" if s.note else "")
+            for s in current_plan.steps
+        )
+        preview_target = "\n".join(f"- [ ] {s.index}. {s.title}" for s in target_plan.steps)
+        raise ValueError(
+            f"PROGRESS_CONFLICT: Структура шагов восстанавливаемой версии v{version} "
+            f"отличается от текущей версии v{current_plan.plan_version}, в которой зафиксирован прогресс.\n"
+            f"Текущие шаги с прогрессом:\n{preview_curr}\n"
+            f"Восстанавливаемые шаги:\n{preview_target}\n"
+            f"Актуальный ETag: '{actual_etag}'. "
+            f"Повторите вызов с reset_progress=True и expected_state_etag='{actual_etag}'."
+        )
+
+    if steps_match and has_progress and not reset_progress:
+        for i, s in enumerate(target_plan.steps):
+            s.completed = current_plan.steps[i].completed
+            s.note = current_plan.steps[i].note
+    else:
+        for s in target_plan.steps:
+            s.completed = False
+            s.note = None
 
 
 class AuditSynchronizer(BaseSynchronizer):
@@ -120,6 +265,7 @@ class AuditSynchronizer(BaseSynchronizer):
         audit_dir: Path,
         plans_dir: Path | None = None,
         reviews_dir: Path | None = None,
+        plan_versions_dir: Path | None = None,
         create_dirs: bool = True,
     ) -> None:
         self.storage = storage
@@ -132,8 +278,14 @@ class AuditSynchronizer(BaseSynchronizer):
         self.plans_dir = Path(plans_dir) if plans_dir else (agents_dir / "plans")
         self.plans_active_dir = self.plans_dir / "active"
         self.plans_completed_dir = self.plans_dir / "completed"
+        self.plan_moves_dir = self.plans_dir / ".moves"
 
         self.reviews_dir = Path(reviews_dir) if reviews_dir else (agents_dir / "reviews")
+        self.plan_versions_dir = (
+            Path(plan_versions_dir) if plan_versions_dir else (agents_dir / "plan_versions")
+        )
+
+        self._sync_errors: dict[str, str] = {}
 
         if create_dirs:
             self.audit_dir.mkdir(parents=True, exist_ok=True)
@@ -141,7 +293,14 @@ class AuditSynchronizer(BaseSynchronizer):
             self.done_dir.mkdir(parents=True, exist_ok=True)
             self.plans_active_dir.mkdir(parents=True, exist_ok=True)
             self.plans_completed_dir.mkdir(parents=True, exist_ok=True)
+            self.plan_moves_dir.mkdir(parents=True, exist_ok=True)
             self.reviews_dir.mkdir(parents=True, exist_ok=True)
+            self.plan_versions_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_sync_error(self, task_id: str) -> str | None:
+        """Возвращает последнюю ошибку синхронизации для задачи или None."""
+        clean_task = sanitize_task_id(task_id)
+        return self._sync_errors.get(clean_task)
 
     def _target_dir(self, status: AuditStatus, category: str) -> Path:
         """Каталог размещения карточки: done/ при COMPLETED, иначе todo/."""
@@ -376,6 +535,223 @@ class AuditSynchronizer(BaseSynchronizer):
         base = self.plans_completed_dir if status == PlanStatus.DONE else self.plans_active_dir
         return base / clean_cat
 
+    def _plan_version_dir(self, plan_id: str) -> Path:
+        """Каталог неизменяемых снимков версий для плана."""
+        clean_id = re.sub(r"[^\w\-.]", "_", plan_id)
+        return self.plan_versions_dir / clean_id
+
+    def _get_latest_snapshot_version(self, plan_id: str) -> int:
+        """Возвращает максимальный номер существующего снимка версии (или 0)."""
+        vdir = self._plan_version_dir(plan_id)
+        if not vdir.exists():
+            return 0
+        versions: list[int] = []
+        for p in vdir.glob("v*.md"):
+            m = re.match(r"^v(\d+)\.md$", p.name)
+            if m:
+                versions.append(int(m.group(1)))
+        return max(versions) if versions else 0
+
+    def recover_orphan_snapshots(self, plan_id: str, current_version: int) -> list[Path]:
+        """Очищает каталог снимков плана от незавершённых редакций (v > current_version).
+
+        Переносит снимки v(N+1) в .agents/plan_versions/<plan-id>/.orphans/.
+        Снимки v1..vN неизменяемы и никогда не удаляются.
+        """
+        version_dir = self._plan_version_dir(plan_id)
+        if not version_dir.exists():
+            return []
+        orphans_dir = version_dir / ".orphans"
+        quarantined: list[Path] = []
+        for p in version_dir.glob("v*.md"):
+            m = re.match(r"^v(\d+)\.md$", p.name)
+            if not m:
+                continue
+            v = int(m.group(1))
+            if v > current_version:
+                orphans_dir.mkdir(parents=True, exist_ok=True)
+                dest = orphans_dir / p.name
+                p.replace(dest)
+                logger.warning(
+                    "ORPHAN_SNAPSHOT_QUARANTINED: Снимок %s (версия %d > текущей %d плана '%s') "
+                    "перемещён в карантин %s (причина: прерванная запись)",
+                    p.name,
+                    v,
+                    current_version,
+                    plan_id,
+                    dest,
+                )
+                quarantined.append(dest)
+        return quarantined
+
+    def recover_moves_for_task(self, task_id: str | None = None) -> list[Path]:
+        """Выполняет recovery незавершённых переносов active/completed по маркерам (A9).
+
+        Recovery маркера при lookup (PlanRepository.get_unique, synchronizer.find_plan_file):
+        - Если target совпадает с target_sha256, а source совпадает со старым -> recovery удаляет source и маркер;
+        - Если target совпадает с target_sha256, а source уже отсутствует -> recovery удаляет маркер;
+        - Если target ещё нет, source цел и совпадает со старым -> отменяем маркер (удаляем маркер);
+        - Любое иное состояние -> raise ValueError(MOVE_CONFLICT) и сохраняет файлы;
+        """
+        if not self.plan_moves_dir.exists():
+            return []
+
+        resolved: list[Path] = []
+        clean_target_task = sanitize_task_id(task_id) if task_id else None
+
+        for marker_path in sorted(self.plan_moves_dir.glob("*.json")):
+            if marker_path.name.startswith("."):
+                continue
+            try:
+                data = json.loads(marker_path.read_text(encoding="utf-8"))
+            except Exception as err:
+                logger.warning(
+                    "MOVE_RECOVERY: Не удалось прочитать маркер %s: %s", marker_path, err
+                )
+                continue
+
+            m_task = sanitize_task_id(str(data.get("task_id") or ""))
+            if clean_target_task and m_task != clean_target_task:
+                continue
+
+            source = Path(data.get("source", ""))
+            target = Path(data.get("target", ""))
+            source_sha = data.get("source_sha256")
+            target_sha = data.get("target_sha256")
+
+            target_exists = target.is_file()
+            source_exists = source.is_file()
+
+            if target_exists:
+                try:
+                    cur_target_sha = hashlib.sha256(target.read_bytes()).hexdigest()
+                except Exception as err:
+                    raise ValueError(
+                        f"MOVE_CONFLICT: не удалось прочитать target '{target}': {err}"
+                    ) from err
+
+                if cur_target_sha != target_sha:
+                    raise ValueError(
+                        f"MOVE_CONFLICT: target-файл '{target}' имеет несовпадающий sha256: "
+                        f"ожидался '{target_sha}', получен '{cur_target_sha}'"
+                    )
+
+                if source_exists:
+                    try:
+                        cur_source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+                    except Exception as err:
+                        raise ValueError(
+                            f"MOVE_CONFLICT: не удалось прочитать source '{source}': {err}"
+                        ) from err
+
+                    if cur_source_sha != source_sha:
+                        raise ValueError(
+                            f"MOVE_CONFLICT: source-файл '{source}' имеет несовпадающий sha256: "
+                            f"ожидался '{source_sha}', получен '{cur_source_sha}'"
+                        )
+
+                    source.unlink(missing_ok=True)
+                    marker_path.unlink(missing_ok=True)
+                    logger.info(
+                        "MOVE_RECOVERY: Завершён перенос для плана '%s' (source удалён)", m_task
+                    )
+                    resolved.append(target)
+                else:
+                    marker_path.unlink(missing_ok=True)
+                    logger.info(
+                        "MOVE_RECOVERY: Завершён перенос для плана '%s' (маркер удалён)", m_task
+                    )
+                    resolved.append(target)
+            else:
+                if source_exists:
+                    try:
+                        cur_source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+                    except Exception as err:
+                        raise ValueError(
+                            f"MOVE_CONFLICT: не удалось прочитать source '{source}': {err}"
+                        ) from err
+
+                    if cur_source_sha != source_sha:
+                        raise ValueError(
+                            f"MOVE_CONFLICT: target отсутствует, но source-файл '{source}' изменён: "
+                            f"ожидался '{source_sha}', получен '{cur_source_sha}'"
+                        )
+
+                    marker_path.unlink(missing_ok=True)
+                    logger.info(
+                        "MOVE_RECOVERY: Отменён незавершённый перенос для плана '%s'", m_task
+                    )
+                    resolved.append(source)
+                else:
+                    raise ValueError(
+                        f"MOVE_CONFLICT: и source '{source}', и target '{target}' отсутствуют для маркера {marker_path.name}"
+                    )
+
+        return resolved
+
+    def _publish_plan_file(
+        self,
+        plan: PlanArtifact,
+        plan_file: Path,
+        target_dir: Path,
+        content: str,
+    ) -> Path:
+        """Публикует план, выполняя перенос с записью маркера при смене каталога (A9).
+
+        Порядок перемещения:
+        1) запись маркера;
+        2) запись/публикация target файла через temp+rename;
+        3) удаление source файла;
+        4) удаление маркера.
+        """
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / plan_file.name
+
+        if target_path.resolve() == plan_file.resolve():
+            _atomic_write_text(plan_file, content)
+            return plan_file
+
+        if target_path.exists():
+            try:
+                target_content = target_path.read_text(encoding="utf-8")
+                target_plan = parse_plan_markdown(target_content, file_path=target_path)
+                if target_plan.id != plan.id:
+                    raise ValueError(
+                        f"MOVE_CONFLICT: target-файл '{target_path}' уже существует и принадлежит плану '{target_plan.id}' (ожидался '{plan.id}')"
+                    )
+            except Exception as err:
+                raise ValueError(
+                    f"MOVE_CONFLICT: target-файл '{target_path}' уже существует: {err}"
+                ) from err
+
+        old_hash = hashlib.sha256(plan_file.read_bytes()).hexdigest()
+        new_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+        self.plan_moves_dir.mkdir(parents=True, exist_ok=True)
+        clean_id = re.sub(r"[^\w\-.]", "_", plan.id)
+        marker_file = self.plan_moves_dir / f"{clean_id}.json"
+        marker_data = {
+            "artifact_id": plan.id,
+            "task_id": plan.task_id,
+            "source": str(plan_file.resolve()),
+            "target": str(target_path.resolve()),
+            "source_sha256": old_hash,
+            "target_sha256": new_hash,
+        }
+        # 1. Запись маркера
+        _atomic_write_text(marker_file, json.dumps(marker_data, ensure_ascii=False, indent=2))
+
+        # 2. Запись target файла через temp+rename
+        _atomic_write_text(target_path, content)
+
+        # 3. Удаление source файла
+        plan_file.unlink(missing_ok=True)
+
+        # 4. Удаление маркера
+        marker_file.unlink(missing_ok=True)
+
+        return target_path
+
     def _review_target_dir(self, category: str) -> Path:
         """Каталог размещения ревью-логов."""
         clean_cat = normalize_category_slug(category)
@@ -402,31 +778,49 @@ class AuditSynchronizer(BaseSynchronizer):
         return results
 
     def _index_artifact_file(
-        self, md_file: Path, location: str, artifact_type: str
+        self,
+        md_file: Path,
+        location: str,
+        artifact_type: str,
+        parsed_artifact: PlanArtifact | ReviewArtifact | None = None,
+        mtime_ns: int | None = None,
+        size: int | None = None,
     ) -> tuple[bool, str | None]:
         """Парсит и индексирует один файл артефакта (план или ревью) в SQLite."""
         try:
-            content = md_file.read_text(encoding="utf-8")
-            st = md_file.stat()
             file_str = str(md_file.resolve())
+            if mtime_ns is None or size is None:
+                st = md_file.stat()
+                mtime_ns = st.st_mtime_ns
+                size = st.st_size
 
             if artifact_type == "plan":
-                plan = parse_plan_markdown(content, file_path=md_file)
+                plan: PlanArtifact
+                if isinstance(parsed_artifact, PlanArtifact):
+                    plan = parsed_artifact
+                else:
+                    content = md_file.read_text(encoding="utf-8")
+                    plan = parse_plan_markdown(content, file_path=md_file)
                 self.storage.index_plan(
                     plan,
                     file_path=file_str,
-                    mtime_ns=st.st_mtime_ns,
-                    size=st.st_size,
+                    mtime_ns=mtime_ns,
+                    size=size,
                     location=location,
                 )
                 return True, plan.id
             elif artifact_type == "review":
-                review = parse_review_markdown(content, file_path=md_file)
+                review: ReviewArtifact
+                if isinstance(parsed_artifact, ReviewArtifact):
+                    review = parsed_artifact
+                else:
+                    content = md_file.read_text(encoding="utf-8")
+                    review = parse_review_markdown(content, file_path=md_file)
                 self.storage.index_review(
                     review,
                     file_path=file_str,
-                    mtime_ns=st.st_mtime_ns,
-                    size=st.st_size,
+                    mtime_ns=mtime_ns,
+                    size=size,
                     location=location,
                 )
                 return True, review.id
@@ -434,6 +828,131 @@ class AuditSynchronizer(BaseSynchronizer):
             logger.warning("Ошибка парсинга артефакта %s (%s): %s", md_file, artifact_type, err)
             return False, None
         return False, None
+
+    def _extract_task_id_from_path(self, path: Path) -> str | None:
+        """Извлекает task_id из файла или имени пути для логирования ошибки синхронизации."""
+        with contextlib.suppress(Exception):
+            content = path.read_text(encoding="utf-8", errors="ignore")
+            m = re.search(r"(?m)^task_id:\s*['\"]?([A-Za-z0-9_.-]+)['\"]?", content)
+            if m:
+                return m.group(1).strip()
+        file_str = str(path.resolve())
+        with contextlib.suppress(Exception):
+            stored_task_id = self.storage.get_task_id_for_file_path(file_str)
+            if stored_task_id:
+                return stored_task_id
+        parts = path.stem.split("-")
+        if len(parts) >= 3 and parts[0] == "plan":
+            return parts[2]
+        return None
+
+    def _sync_plan_file(
+        self,
+        md_file: Path,
+        location: str,
+        mtime_ns: int,
+        size: int,
+        synced: dict[str, Any],
+    ) -> str | None:
+        """Синхронизирует один файл плана с проверкой проекции определения (A10)."""
+        file_str = str(md_file.resolve())
+        try:
+            raw_bytes = md_file.read_bytes()
+            raw_content = raw_bytes.decode("utf-8")
+            plan = parse_plan_markdown(raw_content, file_path=md_file)
+        except Exception as err:
+            logger.warning("Ошибка чтения/парсинга плана %s: %s", md_file, err)
+            task_guess = self._extract_task_id_from_path(md_file)
+            if task_guess:
+                self._sync_errors[task_guess] = f"Ошибка парсинга плана: {err}"
+            return None
+
+        clean_task = sanitize_task_id(plan.task_id)
+        task_lock_path = Path(self.plans_dir) / ".locks" / f"task-{clean_task}.lock"
+        with _advisory_lock(task_lock_path):
+            self.recover_orphan_snapshots(plan.id, plan.plan_version)
+
+            cur_projection = compute_plan_definition_projection(raw_content)
+            cur_sha256 = compute_plan_definition_sha256(cur_projection)
+
+            is_def_changed = (
+                plan.definition_sha256 is not None and cur_sha256 != plan.definition_sha256
+            )
+
+            if is_def_changed:
+                try:
+                    version_dir = self._plan_version_dir(plan.id)
+                    latest_snapshot = self._get_latest_snapshot_version(plan.id)
+                    v1_path = version_dir / "v0001.md"
+                    if latest_snapshot == 0 or not v1_path.exists():
+                        meta_v1 = PlanVersionMetadata(
+                            version=1,
+                            parent_version=None,
+                            created_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            reason="initial creation",
+                            source="manual",
+                            restored_from=None,
+                            definition_sha256=plan.definition_sha256 or cur_sha256,
+                        )
+                        fm_v1 = dump_frontmatter(meta_v1.model_dump()).strip()
+                        snap_v1 = f"---\n{fm_v1}\n---\n{raw_content}"
+                        _atomic_write_snapshot(v1_path, snap_v1)
+                        latest_snapshot = 1
+
+                    new_version = max(plan.plan_version, latest_snapshot) + 1
+
+                    def _update_meta(m: dict[str, Any]) -> dict[str, Any]:
+                        m["plan_version"] = new_version
+                        m["definition_sha256"] = cur_sha256
+                        return m
+
+                    updated_content = rebuild_card(raw_content, _update_meta)
+
+                    meta_vN = PlanVersionMetadata(
+                        version=new_version,
+                        parent_version=new_version - 1,
+                        created_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        reason="manual edit",
+                        source="manual",
+                        restored_from=None,
+                        definition_sha256=cur_sha256,
+                    )
+                    fm_vN = dump_frontmatter(meta_vN.model_dump()).strip()
+                    snap_vN = f"---\n{fm_vN}\n---\n{updated_content}"
+                    vN_path = version_dir / f"v{new_version:04d}.md"
+
+                    _atomic_write_snapshot(vN_path, snap_vN)
+                    _atomic_write_text(md_file, updated_content)
+
+                    self._sync_errors.pop(clean_task, None)
+                    self._index_artifact_file(md_file, location, "plan")
+                    return plan.id
+                except Exception as err:
+                    logger.warning(
+                        "Ошибка версионирования ручной правки плана %s: %s", md_file, err
+                    )
+                    self._sync_errors[clean_task] = f"Ошибка версионирования ручной правки: {err}"
+                    return None
+
+            # Определение не менялось
+            needs_index = True
+            if file_str in synced:
+                s_mtime_ns, s_size, _art_id, _ = synced[file_str]
+                if s_mtime_ns == mtime_ns and s_size == size:
+                    needs_index = False
+
+            if needs_index:
+                self._sync_errors.pop(clean_task, None)
+                self._index_artifact_file(
+                    md_file,
+                    location,
+                    "plan",
+                    parsed_artifact=plan,
+                    mtime_ns=mtime_ns,
+                    size=size,
+                )
+
+            return plan.id
 
     def sync_artifacts(self) -> int:
         """Инкрементальная синхронизация планов и ревью с точным mtime_ns."""
@@ -448,18 +967,24 @@ class AuditSynchronizer(BaseSynchronizer):
             file_str = str(md_file.resolve())
             disk_paths.add(file_str)
 
-            needs_index = True
-            if file_str in synced:
-                s_mtime_ns, s_size, art_id, _s_type = synced[file_str]
-                if s_mtime_ns == mtime_ns and s_size == size:
-                    needs_index = False
-                    active_ids.add(art_id)
-
-            if needs_index:
-                ok, art_id_new = self._index_artifact_file(md_file, location, art_type)
-                if ok and art_id_new:
+            if art_type == "plan":
+                plan_id = self._sync_plan_file(md_file, location, mtime_ns, size, synced)
+                if plan_id:
                     indexed_count += 1
-                    active_ids.add(art_id_new)
+                    active_ids.add(plan_id)
+            else:
+                needs_index = True
+                if file_str in synced:
+                    s_mtime_ns, s_size, art_id, _s_type = synced[file_str]
+                    if s_mtime_ns == mtime_ns and s_size == size:
+                        needs_index = False
+                        active_ids.add(art_id)
+
+                if needs_index:
+                    ok, art_id_new = self._index_artifact_file(md_file, location, art_type)
+                    if ok and art_id_new:
+                        indexed_count += 1
+                        active_ids.add(art_id_new)
 
         # Очистка удалённых файлов артефактов
         deleted_paths = set(synced.keys()) - disk_paths
@@ -717,7 +1242,28 @@ class AuditSynchronizer(BaseSynchronizer):
                     # Повторная проверка под artifact-локом: план мог быть создан
                     # параллельной записью между task-локом и этим моментом.
                     self._raise_if_plan_exists(clean_task)
+                plan.plan_version = 1
+                projection = compute_plan_definition_projection(plan)
+                plan.definition_sha256 = compute_plan_definition_sha256(projection)
                 content = serialize_plan_markdown(plan)
+
+                # Запись неизменяемого снимка v0001.md
+                version_dir = self._plan_version_dir(plan.id)
+                v1_path = version_dir / "v0001.md"
+                if not v1_path.exists():
+                    meta_v1 = PlanVersionMetadata(
+                        version=1,
+                        parent_version=None,
+                        created_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        reason="initial creation",
+                        source="mcp",
+                        restored_from=None,
+                        definition_sha256=plan.definition_sha256,
+                    )
+                    fm_v1 = dump_frontmatter(meta_v1.model_dump()).strip()
+                    snap_content = f"---\n{fm_v1}\n---\n{content}"
+                    _atomic_write_snapshot(v1_path, snap_content)
+
                 _atomic_write_text(file_path, content)
 
                 location = "completed" if plan.status == PlanStatus.DONE else "active"
@@ -754,6 +1300,9 @@ class AuditSynchronizer(BaseSynchronizer):
         pr_url: str | None,
         target_files: list[str] | None,
         add_steps: list[str] | None,
+        details: str | None = None,
+        replace_steps: list[str] | None = None,
+        reset_progress: bool = False,
     ) -> None:
         """Применяет изменения полей к объекту PlanArtifact."""
         if title:
@@ -764,7 +1313,26 @@ class AuditSynchronizer(BaseSynchronizer):
             plan.target_files = target_files
         if status is not None:
             plan.status = status
-        if add_steps:
+        if details is not None:
+            plan.content = details
+        if replace_steps is not None:
+            new_steps: list[PlanStep] = []
+            for i, step_text in enumerate(replace_steps, 1):
+                clean_title = _normalize_step_title(step_text)
+                completed = False
+                note = None
+                if (
+                    not reset_progress
+                    and i <= len(plan.steps)
+                    and _steps_structure_matches([step_text], [plan.steps[i - 1]])
+                ):
+                    completed = plan.steps[i - 1].completed
+                    note = plan.steps[i - 1].note
+                new_steps.append(
+                    PlanStep(index=i, title=clean_title, completed=completed, note=note)
+                )
+            plan.steps = new_steps
+        elif add_steps:
             start_idx = len(plan.steps) + 1
             for i, step_text in enumerate(add_steps):
                 clean_text = step_text.strip()
@@ -778,11 +1346,36 @@ class AuditSynchronizer(BaseSynchronizer):
         plan: PlanArtifact,
         raw_content: str,
         add_steps: list[str] | None,
+        details: str | None = None,
+        replace_steps: list[str] | None = None,
     ) -> str:
         """Сериализует план, сохраняя исходные Markdown-секции."""
         content_to_use = raw_content
-        if add_steps:
-            content_to_use = append_steps_to_plan_markdown(raw_content, add_steps)
+        if details is not None:
+            content_to_use = replace_goal_section_in_markdown(content_to_use, details)
+        if plan.title:
+            content_to_use = re.sub(
+                r"(?m)^#[ ]+(?:План|Plan):.*$",
+                f"# План: {plan.task_id} {plan.title}",
+                content_to_use,
+            )
+        status_badges = {
+            PlanStatus.DISCUSSED: "⚪ Обсуждено (`discussed`)",
+            PlanStatus.APPROVED: "🔵 Утверждено (`approved`)",
+            PlanStatus.IN_PROGRESS: "🟡 В процессе реализации (`in_progress`)",
+            PlanStatus.DONE: "🟢 Сделано (`done`)",
+            PlanStatus.CANCELLED: "🔴 Отменено (`cancelled`)",
+        }
+        badge = status_badges.get(plan.status, f"`{plan.status.value}`")
+        content_to_use = re.sub(
+            r"(?m)^\s*>\s*(?:\*\*)?(?:Статус|Status)(?:\*\*)?:.*$",
+            f"> **Статус:** {badge}",
+            content_to_use,
+        )
+        if replace_steps is not None:
+            content_to_use = replace_steps_in_markdown(content_to_use, replace_steps)
+        elif add_steps:
+            content_to_use = append_steps_to_plan_markdown(content_to_use, add_steps)
 
         meta: dict[str, Any] = {
             "id": plan.id,
@@ -791,7 +1384,10 @@ class AuditSynchronizer(BaseSynchronizer):
             "title": plan.title,
             "category": plan.category,
             "status": plan.status.value,
+            "plan_version": plan.plan_version,
         }
+        if plan.definition_sha256:
+            meta["definition_sha256"] = plan.definition_sha256
         if plan.pr_url:
             meta["pr_url"] = plan.pr_url
         if plan.target_files:
@@ -828,29 +1424,158 @@ class AuditSynchronizer(BaseSynchronizer):
         target_files: list[str] | None = None,
         add_steps: list[str] | None = None,
         category: str | None = None,
+        reason: str | None = None,
+        details: str | None = None,
+        replace_details: str | None = None,
+        replace_steps: list[str] | None = None,
+        expected_version: int | None = None,
+        reopen: bool = False,
+        reset_progress: bool = False,
     ) -> tuple[PlanArtifact, Path]:
         """Обновляет метаданные плана и перемещает файл при смене статуса.
 
         A13: category опционально уточняет выбор плана при нескольких
         планах одного task_id.
         """
-        plan_file = self.find_plan_file(task_id, category=category)
-        if not plan_file:
-            raise FileNotFoundError(f"Файл плана для задачи '{task_id}' не найден на диске")
+        eff_details = replace_details if replace_details is not None else details
 
-        lock_path = self._stable_plan_lock(plan_file)
-        with _advisory_lock(lock_path):
-            content = plan_file.read_text(encoding="utf-8")
-            plan = parse_plan_markdown(content, file_path=plan_file)
+        clean_task = sanitize_task_id(task_id)
+        task_lock_path = Path(self.plans_dir) / ".locks" / f"task-{clean_task}.lock"
+        with _advisory_lock(task_lock_path):
+            plan_file = self.find_plan_file(clean_task, category=category)
+            if not plan_file:
+                raise FileNotFoundError(f"Файл плана для задачи '{task_id}' не найден на диске")
 
-            self._apply_plan_updates(plan, title, status, pr_url, target_files, add_steps)
+            lock_path = self._stable_plan_lock(plan_file)
+            with _advisory_lock(lock_path):
+                raw_bytes = plan_file.read_bytes()
+                content = raw_bytes.decode("utf-8")
+                plan = parse_plan_markdown(content, file_path=plan_file)
+
+                self.recover_orphan_snapshots(plan.id, plan.plan_version)
+
+            if expected_version is not None and expected_version != plan.plan_version:
+                raise ValueError(
+                    f"VERSION_CONFLICT: ожидалась версия {expected_version}, "
+                    f"актуальная версия плана {plan.plan_version}"
+                )
+
+            is_def_param = any(
+                x is not None
+                for x in (title, add_steps, target_files, replace_details, details, replace_steps)
+            )
+            if plan.status == PlanStatus.DONE and is_def_param and not reopen:
+                raise ValueError(
+                    f"PLAN_REOPEN_REQUIRED: план '{plan.task_id}' находится в статусе DONE. "
+                    "Для правки определения требуется reopen=True."
+                )
+
+            if replace_steps is not None:
+                has_progress = any(s.completed or s.note for s in plan.steps)
+                if (
+                    has_progress
+                    and not _steps_structure_matches(replace_steps, plan.steps)
+                    and not reset_progress
+                ):
+                    actual_etag = hashlib.sha256(raw_bytes).hexdigest()
+                    preview_curr = "\n".join(
+                        f"- [{'x' if s.completed else ' '}] {s.index}. {s.title}"
+                        + (f" (note: {s.note})" if s.note else "")
+                        for s in plan.steps
+                    )
+                    preview_target = "\n".join(
+                        f"- [ ] {i}. {s}" for i, s in enumerate(replace_steps, 1)
+                    )
+                    raise ValueError(
+                        f"PROGRESS_CONFLICT: Структура шагов в replace_steps отличается от текущего плана с зафиксированным прогрессом.\n"
+                        f"Текущие шаги:\n{preview_curr}\n"
+                        f"Новые шаги:\n{preview_target}\n"
+                        f"Актуальный ETag: '{actual_etag}'. "
+                        f"Повторите вызов с reset_progress=True и актуальным expected_state_etag."
+                    )
+
+            old_projection = compute_plan_definition_projection(content)
+            old_sha256 = compute_plan_definition_sha256(old_projection)
+
+            self._apply_plan_updates(
+                plan,
+                title,
+                status,
+                pr_url,
+                target_files,
+                add_steps,
+                eff_details,
+                replace_steps=replace_steps,
+                reset_progress=reset_progress,
+            )
+
+            candidate_content = self._render_updated_plan(
+                plan, content, add_steps, eff_details, replace_steps=replace_steps
+            )
+            candidate_projection = compute_plan_definition_projection(candidate_content)
+            candidate_sha256 = compute_plan_definition_sha256(candidate_projection)
+
+            is_definition_changed = candidate_sha256 != old_sha256
+
+            if is_definition_changed:
+                if status is None and plan.status in (
+                    PlanStatus.APPROVED,
+                    PlanStatus.IN_PROGRESS,
+                    PlanStatus.DONE,
+                ):
+                    plan.status = PlanStatus.DISCUSSED
+                    candidate_content = self._render_updated_plan(
+                        plan, content, add_steps, eff_details, replace_steps=replace_steps
+                    )
+
+                version_dir = self._plan_version_dir(plan.id)
+                latest_snapshot = self._get_latest_snapshot_version(plan.id)
+                v1_path = version_dir / "v0001.md"
+                if latest_snapshot == 0 or not v1_path.exists():
+                    # Legacy-план или отсутствие базового снимка: сохраняем старое состояние как v1
+                    meta_v1 = PlanVersionMetadata(
+                        version=1,
+                        parent_version=None,
+                        created_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        reason="initial creation",
+                        source="manual",
+                        restored_from=None,
+                        definition_sha256=old_sha256,
+                    )
+                    fm_v1 = dump_frontmatter(meta_v1.model_dump()).strip()
+                    snap_v1 = f"---\n{fm_v1}\n---\n{content}"
+                    _atomic_write_snapshot(v1_path, snap_v1)
+                    latest_snapshot = 1
+
+                new_version = max(plan.plan_version, latest_snapshot) + 1
+                plan.plan_version = new_version
+                plan.definition_sha256 = candidate_sha256
+
+                final_content = self._render_updated_plan(
+                    plan, content, add_steps, eff_details, replace_steps=replace_steps
+                )
+
+                meta_vN = PlanVersionMetadata(
+                    version=new_version,
+                    parent_version=new_version - 1,
+                    created_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    reason=reason or "updated via MCP",
+                    source="mcp",
+                    restored_from=None,
+                    definition_sha256=candidate_sha256,
+                )
+                vN_path = version_dir / f"v{new_version:04d}.md"
+                fm_vN = dump_frontmatter(meta_vN.model_dump()).strip()
+                snap_vN = f"---\n{fm_vN}\n---\n{final_content}"
+                _atomic_write_snapshot(vN_path, snap_vN)
+            else:
+                if plan.definition_sha256 is None:
+                    plan.definition_sha256 = old_sha256
+                final_content = candidate_content
 
             # Перемещение при смене статуса на/с DONE
             target_dir = self._plan_target_dir(plan.status, plan.category)
-            new_path = move_card(plan_file, target_dir)
-
-            updated_content = self._render_updated_plan(plan, content, add_steps)
-            _atomic_write_text(new_path, updated_content)
+            new_path = self._publish_plan_file(plan, plan_file, target_dir, final_content)
 
             location = "completed" if plan.status == PlanStatus.DONE else "active"
             self._index_artifact_file(new_path, location, "plan")
@@ -859,6 +1584,149 @@ class AuditSynchronizer(BaseSynchronizer):
                 self.storage.drop_artifact_path(str(plan_file.resolve()))
 
             return plan, new_path
+
+    def restore_plan_version(
+        self,
+        task_id: str,
+        version: int,
+        expected_version: int,
+        expected_state_etag: str,
+        reason: str,
+        reset_progress: bool = False,
+        reopen: bool = False,
+        category: str | None = None,
+    ) -> dict[str, Any]:
+        """Безопасный откат редакции плана: восстановление как новая версия N+1.
+
+        Объектом снимка является карточка плана (.agents/plans/...).
+        """
+        if not reason or not reason.strip():
+            raise ValueError("reason must not be empty")
+
+        clean_task = sanitize_task_id(task_id)
+        clean_cat = normalize_category_slug(category) if category else None
+
+        task_lock_path = Path(self.plans_dir) / ".locks" / f"task-{clean_task}.lock"
+        with _advisory_lock(task_lock_path):
+            from mcp_audit.repository import PlanRepository
+
+            plan_file = PlanRepository(self).get_unique(clean_task, category=clean_cat)
+            if plan_file is None:
+                raise FileNotFoundError(f"Файл плана для задачи '{clean_task}' не найден на диске")
+
+            raw_bytes = plan_file.read_bytes()
+            actual_etag = hashlib.sha256(raw_bytes).hexdigest()
+            if expected_state_etag != actual_etag:
+                raise ValueError(
+                    f"STATE_ETAG_CONFLICT: ожидался ETag '{expected_state_etag}', "
+                    f"актуальный ETag '{actual_etag}'"
+                )
+
+            content = raw_bytes.decode("utf-8")
+            plan = parse_plan_markdown(content, file_path=plan_file)
+
+            self.recover_orphan_snapshots(plan.id, plan.plan_version)
+
+            if expected_version != plan.plan_version:
+                raise ValueError(
+                    f"VERSION_CONFLICT: ожидалась версия {expected_version}, "
+                    f"актуальная версия плана {plan.plan_version}"
+                )
+
+            if plan.status == PlanStatus.DONE and not reopen:
+                raise ValueError(
+                    f"PLAN_REOPEN_REQUIRED: план '{plan.task_id}' находится в статусе DONE. "
+                    "Для восстановления требуется reopen=True."
+                )
+
+            version_dir = self._plan_version_dir(plan.id)
+            _verify_plan_version_history(version_dir, plan.id, plan.plan_version)
+
+            target_snap_path = version_dir / f"v{version:04d}.md"
+            if not target_snap_path.exists() or version <= 0:
+                raise ValueError(
+                    f"PLAN_VERSION_NOT_FOUND: целевая версия {version} для плана '{plan.id}' не найдена"
+                )
+
+            raw_target_snap = target_snap_path.read_text(encoding="utf-8")
+            target_meta_dict, target_snap_body = split_frontmatter(raw_target_snap)
+            target_meta = PlanVersionMetadata.model_validate(target_meta_dict)
+            target_plan = parse_plan_markdown(target_snap_body)
+
+            _resolve_restore_progress(plan, target_plan, version, reset_progress, actual_etag)
+
+            new_version = plan.plan_version + 1
+            target_plan.plan_version = new_version
+            target_plan.status = PlanStatus.DISCUSSED
+            target_plan.updated_at = datetime.now().strftime("%Y-%m-%d")
+            target_plan.definition_sha256 = target_meta.definition_sha256
+
+            # Формирование контента восстанавливаемого плана
+            def _update_restored_meta(m: dict[str, Any]) -> dict[str, Any]:
+                m["plan_version"] = new_version
+                m["status"] = PlanStatus.DISCUSSED.value
+                m["definition_sha256"] = target_meta.definition_sha256
+                m["updated_at"] = datetime.now().strftime("%Y-%m-%d")
+                return m
+
+            try:
+                restored_content = rebuild_card(target_snap_body, _update_restored_meta)
+            except Exception:
+                restored_content = serialize_plan_markdown(target_plan)
+
+            # Статус-бейдж
+            restored_content = re.sub(
+                r"(?m)^\s*>\s*(?:\*\*)?(?:Статус|Status)(?:\*\*)?:.*$",
+                "> **Статус:** ⚪ Обсуждено (`discussed`)",
+                restored_content,
+            )
+
+            # Форматирование шагов
+            step_strings = []
+            for s in target_plan.steps:
+                box = "x" if s.completed else " "
+                line = f"- [{box}] {s.index}. {s.title}"
+                if s.note:
+                    line += f"\n  > 📝 {s.note.strip()}"
+                step_strings.append(line)
+            restored_content = replace_steps_in_markdown(restored_content, step_strings)
+
+            # Запись неизменяемого нового снимка v{new_version:04d}.md
+            meta_new = PlanVersionMetadata(
+                version=new_version,
+                parent_version=plan.plan_version,
+                created_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                reason=reason.strip(),
+                source="restore",
+                restored_from=version,
+                definition_sha256=target_meta.definition_sha256,
+            )
+            fm_new = dump_frontmatter(meta_new.model_dump()).strip()
+            snap_new = f"---\n{fm_new}\n---\n{restored_content}"
+            v_new_path = version_dir / f"v{new_version:04d}.md"
+            _atomic_write_snapshot(v_new_path, snap_new)
+
+            # Перемещение и обновление текущего файла (active)
+            target_dir = self._plan_target_dir(PlanStatus.DISCUSSED, plan.category)
+            new_path = self._publish_plan_file(plan, plan_file, target_dir, restored_content)
+
+            location = "active"
+            self._index_artifact_file(new_path, location, "plan")
+            if str(plan_file.resolve()) != str(new_path.resolve()):
+                self.storage.drop_artifact_path(str(plan_file.resolve()))
+
+            return {
+                "status": "restored",
+                "task_id": plan.task_id,
+                "plan_id": plan.id,
+                "new_version": new_version,
+                "restored_from": version,
+                "plan_status": "discussed",
+                "progress_reset": reset_progress,
+                "object_type": "plan_card",
+                "message": "Объектом снимка является карточка плана (.agents/plans/...)",
+                "file_path": str(new_path),
+            }
 
     def advance_plan_step(
         self,
@@ -874,38 +1742,43 @@ class AuditSynchronizer(BaseSynchronizer):
         A13: category опционально уточняет выбор плана при нескольких
         планах одного task_id.
         """
-        plan_file = self.find_plan_file(task_id, category=category)
-        if not plan_file:
-            raise FileNotFoundError(f"Файл плана для задачи '{task_id}' не найден на диске")
+        clean_task = sanitize_task_id(task_id)
+        task_lock_path = Path(self.plans_dir) / ".locks" / f"task-{clean_task}.lock"
+        with _advisory_lock(task_lock_path):
+            plan_file = self.find_plan_file(clean_task, category=category)
+            if not plan_file:
+                raise FileNotFoundError(f"Файл плана для задачи '{task_id}' не найден на диске")
 
-        lock_path = self._stable_plan_lock(plan_file)
-        with _advisory_lock(lock_path):
-            content = plan_file.read_text(encoding="utf-8")
-            plan = parse_plan_markdown(content, file_path=plan_file)
+            lock_path = self._stable_plan_lock(plan_file)
+            with _advisory_lock(lock_path):
+                content = plan_file.read_text(encoding="utf-8")
+                plan = parse_plan_markdown(content, file_path=plan_file)
 
-            # Проверка порядка выполнения
-            if not allow_out_of_order and status == "done" and step > 1:
-                for prev in plan.steps:
-                    if prev.index < step and not prev.completed:
-                        raise ValueError(
-                            f"Нельзя закрыть шаг {step} ('{plan.steps[step - 1].title if step <= len(plan.steps) else ''}') "
-                            f"раньше незавершённого шага {prev.index} ('{prev.title}'). "
-                            "Используйте allow_out_of_order=True для принудительного выполнения."
-                        )
+                self.recover_orphan_snapshots(plan.id, plan.plan_version)
 
-            mutated_content, status_changed, _new_status = mutate_plan_step_in_markdown(
-                content=content,
-                step_index=step,
-                status=status,
-                note=note,
-            )
-            updated_plan = parse_plan_markdown(mutated_content, file_path=plan_file)
+                # Проверка порядка выполнения
+                if not allow_out_of_order and status == "done" and step > 1:
+                    for prev in plan.steps:
+                        if prev.index < step and not prev.completed:
+                            raise ValueError(
+                                f"Нельзя закрыть шаг {step} ('{plan.steps[step - 1].title if step <= len(plan.steps) else ''}') "
+                                f"раньше незавершённого шага {prev.index} ('{prev.title}'). "
+                                "Используйте allow_out_of_order=True для принудительного выполнения."
+                            )
 
-            # Перемещение файла между active/ и completed/ при изменении статуса
-            target_dir = self._plan_target_dir(updated_plan.status, updated_plan.category)
-            new_path = move_card(plan_file, target_dir)
+                mutated_content, status_changed, _new_status = mutate_plan_step_in_markdown(
+                    content=content,
+                    step_index=step,
+                    status=status,
+                    note=note,
+                )
+                updated_plan = parse_plan_markdown(mutated_content, file_path=plan_file)
 
-            _atomic_write_text(new_path, mutated_content)
+                # Перемещение файла между active/ и completed/ при изменении статуса
+                target_dir = self._plan_target_dir(updated_plan.status, updated_plan.category)
+                new_path = self._publish_plan_file(
+                    updated_plan, plan_file, target_dir, mutated_content
+                )
 
             location = "completed" if updated_plan.status == PlanStatus.DONE else "active"
             self._index_artifact_file(new_path, location, "plan")
@@ -935,6 +1808,7 @@ class AuditSynchronizer(BaseSynchronizer):
                 status_changed=status_changed,
                 new_plan_status=updated_plan.status if status_changed else None,
                 file_path=str(new_path),
+                plan_version=updated_plan.plan_version,
             )
 
     def save_review(self, review: ReviewArtifact) -> Path:

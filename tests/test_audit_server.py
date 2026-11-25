@@ -55,6 +55,8 @@ async def test_audit_tools_registration(
     assert any("search_debt" in name for name in tool_names)
     assert any("record_debt" in name for name in tool_names)
     assert any("update_debt_status" in name for name in tool_names)
+    assert any("get_plan_versions" in name for name in tool_names)
+    assert any("restore_plan_version" in name for name in tool_names)
 
 
 def test_record_and_search_debt(
@@ -675,3 +677,14 @@ def test_record_debt_parallel_duplicate_returns_single_card(
     assert len(created_ids) == 1
     assert len(duplicate_errors) == 3
     assert all(eid == created_ids[0] for eid in duplicate_errors)
+
+
+def test_audit_none_coercion_protection() -> None:
+    """Проверяет, что списковые аргументы отсекают None и не создают фиктивную строку 'None'."""
+    from mcp_audit.handlers.common import _coerce_json_int, _coerce_json_list
+
+    assert _coerce_json_list([None, "src/foo.py", None]) == ["src/foo.py"]
+    assert _coerce_json_list('[null, "src/bar.py"]') == ["src/bar.py"]
+    assert _coerce_json_int(True) == 0
+    assert _coerce_json_int(False) == 0
+    assert _coerce_json_int("42") == 42

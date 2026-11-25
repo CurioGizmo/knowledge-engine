@@ -56,7 +56,7 @@ def test_bm25_weights_and_immediate_search(tmp_path: Path):
     assert BM25_WEIGHTS[14] == 1.5  # root_cause
     assert BM25_WEIGHTS[15] == 1.0  # solution
     assert BM25_WEIGHTS[16] == 1.0  # rationale
-    assert BM25_WEIGHTS[17] == 1.5  # refutation_reason
+    assert BM25_WEIGHTS[17] == 0.0  # refutation_reason (UNINDEXED)
     assert BM25_WEIGHTS[18] == 2.0  # tags
     assert BM25_WEIGHTS[19] == 0.15  # body
     db_path = tmp_path / "fts_weights.db"
@@ -240,6 +240,160 @@ def test_resolve_hypotheses_duplicate_ids_rejected(tmp_path: Path):
                 ]
             )
         )
+
+
+def test_resolve_hypotheses_pass2_partial_failure_syncs_and_returns_details(tmp_path: Path):
+    """Проверка Step 5 / AUDIT-FIX-P0: при сбое на k-й карточке в Pass 2 выполняется storage.sync() и возвращается partial_failure."""
+    db_path = tmp_path / "partial_fail.db"
+    k_dir = tmp_path / "knowledge"
+    storage = KnowledgeStorage(db_path=db_path, knowledge_dir=k_dir)
+    service = KnowledgeService(storage=storage, knowledge_dir=k_dir)
+
+    # 1. Создаем две разные гипотезы
+    h1 = HypothesisRecordRequest(
+        title="Утечка памяти в кэше LRU",
+        category="backend",
+        symptom="Потребление RAM растет при частых обновлениях ключей кэша",
+        hypothesis="Кэш не освобождает циклические ссылки при вытеснении",
+        slug="cache-leak-hypo",
+    )
+    service.propose_hypothesis(h1)
+
+    h2 = HypothesisRecordRequest(
+        title="Таймаут сокетов TCP при реконнекте",
+        category="backend",
+        symptom="Соединение клиента зависает на 60 секунд при сбросе сети",
+        hypothesis="Отсутствует SO_KEEPALIVE и TCP_USER_TIMEOUT на сокете",
+        slug="socket-timeout-hypo",
+    )
+    service.propose_hypothesis(h2)
+
+    assert len(service.get(["backend-cache-leak-hypo"]).cards) == 1
+    assert len(service.get(["backend-socket-timeout-hypo"]).cards) == 1
+
+    orig_find = service._resolve_use_case.repo.find_card_file
+    pass1_done = False
+
+    def hooked_find(card_id: str):
+        if pass1_done and card_id == "backend-socket-timeout-hypo":
+            return None
+        return orig_find(card_id)
+
+    sync_called = False
+    orig_sync = storage.sync
+
+    def hooked_sync():
+        nonlocal sync_called
+        sync_called = True
+        return orig_sync()
+
+    orig_validate = service._resolve_use_case._validate_resolution_item
+
+    def hooked_validate(res):
+        ret = orig_validate(res)
+        if res.id == "backend-socket-timeout-hypo":
+            nonlocal pass1_done
+            pass1_done = True
+        return ret
+
+    with (
+        patch.object(service._resolve_use_case.repo, "find_card_file", side_effect=hooked_find),
+        patch.object(storage, "sync", side_effect=hooked_sync),
+        patch.object(
+            service._resolve_use_case, "_validate_resolution_item", side_effect=hooked_validate
+        ),
+    ):
+        resp = service.resolve_hypotheses(
+            HypothesesResolveRequest(
+                task_id="TASK-PARTIAL",
+                resolutions=[
+                    HypothesisResolution(
+                        id="backend-cache-leak-hypo",
+                        action="drop",
+                    ),
+                    HypothesisResolution(
+                        id="backend-socket-timeout-hypo",
+                        action="drop",
+                    ),
+                ],
+            )
+        )
+
+    assert resp["status"] == "partial_failure"
+    assert resp["task_id"] == "TASK-PARTIAL"
+    assert resp["resolved_count"] == 1
+    assert len(resp["details"]) == 1
+    assert resp["details"][0]["id"] == "backend-cache-leak-hypo"
+    assert "удалена между проходами" in resp["error"]
+    assert sync_called is True
+
+    # Первая карточка удалена
+    assert len(service.get(["backend-cache-leak-hypo"]).cards) == 0
+    # Вторая осталась нетронутой
+    assert len(service.get(["backend-socket-timeout-hypo"]).cards) == 1
+
+
+def test_resolve_hypotheses_pass2_first_card_failure_raises_and_syncs(tmp_path: Path):
+    """Проверка Step 5 / AUDIT-FIX-P0: при сбое на первой карточке в Pass 2 исключение пробрасывается, но sync() вызывается."""
+    db_path = tmp_path / "first_fail.db"
+    k_dir = tmp_path / "knowledge"
+    storage = KnowledgeStorage(db_path=db_path, knowledge_dir=k_dir)
+    service = KnowledgeService(storage=storage, knowledge_dir=k_dir)
+
+    h1 = HypothesisRecordRequest(
+        title="Зависание пула соединений",
+        category="backend",
+        symptom="Пул соединений блокирует воркеры при исчерпании лимита",
+        hypothesis="Счетчик активных соединений не декрементируется при ошибке",
+        slug="pool-hang-hypo",
+    )
+    service.propose_hypothesis(h1)
+
+    sync_called = False
+    orig_sync = storage.sync
+
+    def hooked_sync():
+        nonlocal sync_called
+        sync_called = True
+        return orig_sync()
+
+    orig_find = service._resolve_use_case.repo.find_card_file
+    pass1_done = False
+
+    def hooked_find(card_id: str):
+        if pass1_done:
+            raise RuntimeError("Disk read error in Pass 2")
+        return orig_find(card_id)
+
+    orig_validate = service._resolve_use_case._validate_resolution_item
+
+    def hooked_validate(res):
+        ret = orig_validate(res)
+        nonlocal pass1_done
+        pass1_done = True
+        return ret
+
+    with (
+        patch.object(service._resolve_use_case.repo, "find_card_file", side_effect=hooked_find),
+        patch.object(
+            service._resolve_use_case, "_validate_resolution_item", side_effect=hooked_validate
+        ),
+        patch.object(storage, "sync", side_effect=hooked_sync),
+    ):
+        with pytest.raises(RuntimeError, match="Disk read error in Pass 2"):
+            service.resolve_hypotheses(
+                HypothesesResolveRequest(
+                    task_id="TASK-FAIL-1",
+                    resolutions=[
+                        HypothesisResolution(
+                            id="backend-pool-hang-hypo",
+                            action="drop",
+                        ),
+                    ],
+                )
+            )
+
+    assert sync_called is True
 
 
 def test_refute_merge_into_user_confirmed_guardrail(tmp_path: Path):

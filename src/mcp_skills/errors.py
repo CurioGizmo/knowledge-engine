@@ -33,6 +33,10 @@ class FlowNotFoundError(FlowError):
     """Сценарий флоу не найден."""
 
 
+class SessionNotFoundError(FlowNotFoundError):
+    """Активная сессия флоу не найдена."""
+
+
 class InvalidFlowFormatError(FlowError):
     """Некорректный формат сценария флоу, метаданных или этапов."""
 
@@ -134,6 +138,7 @@ __all__ = [
     "MaxExtensionDepthError",
     "MissingRequiredBlockError",
     "SessionConflictError",
+    "SessionNotFoundError",
     "SkillAlreadyExistsError",
     "SkillNotFoundError",
     "SkillsError",

@@ -72,11 +72,13 @@ def rerank_hits(
     *,
     field_bonus: dict[str, float] | None = None,
 ) -> list[SearchHit]:
-    """Переранжирует кандидатов с учетом raw_bm25 и field_bonus.
+    """Переранжирует кандидатов с учетом raw_bm25, field_bonus и trust_rank.
 
     Ключ сортировки:
-    (trust_rank, -(score), hit.id)
-    где score = max(-raw_bm25, 0.0) + sum(field_bonuses)
+    1. is_fuzzy (0 для прямого FTS-поиска, 1 для fuzzy-догона)
+    2. -composite_score (где composite_score = total_score * trust_weight)
+    3. -matched_columns (число совпавших полей как тай-брейкер)
+    4. hit.id (детерминированный тай-брейкер)
     """
     bonus_map = field_bonus or {}
 
@@ -86,6 +88,26 @@ def rerank_hits(
             bonus_map.get(col, 0.0) for col, matched in hit.field_matches.items() if matched
         )
         total_score = base_score + bonuses
-        return (hit.trust_rank, -round(total_score, 6), -hit.matched_columns, hit.id)
+
+        # Разделение FTS (прямой канал) и Fuzzy (догон)
+        is_fuzzy = 1 if hit.trust_rank >= 1000 or hit.trust_rank == 1 else 0
+
+        # Мягкое взвешивание trust_rank (knowledge-карточки имеют ранг >= 10)
+        rank_val = hit.trust_rank % 1000
+        if rank_val >= 10:
+            human_tier = rank_val // 10  # 1 (human) или 2 (auto)
+            status_tier = rank_val % 10  # 1 (verified), 2 (active), 3 (suspect), 4 (hypothesis)
+            human_factor = 1.2 if human_tier == 1 else 1.0
+            status_factor = (
+                1.1
+                if status_tier == 1
+                else (1.05 if status_tier == 2 else (0.95 if status_tier == 3 else 0.9))
+            )
+            trust_weight = human_factor * status_factor
+            composite_score = total_score * trust_weight
+        else:
+            composite_score = total_score
+
+        return (is_fuzzy, -round(composite_score, 6), -hit.matched_columns, hit.id)
 
     return sorted(hits, key=sort_key)

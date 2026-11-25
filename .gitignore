@@ -49,8 +49,14 @@ htmlcov/
 docs/plans/
 tasks/
 .agents/plans/
+.agents/plan_versions/
 .agents/reviews/
+.agents/orchestration/
+.agents/orchestration-*.md
+docs/orchestration/
 *.lock
 !uv.lock
 /scripts/translit_research/
 *.zip
+scratch/
+docs/testing/

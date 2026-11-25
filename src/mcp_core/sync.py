@@ -10,6 +10,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -56,7 +57,6 @@ def _stale_sweep(dest_dir: Path, max_age_sec: float = 3600.0) -> None:
                     try:
                         with entry.open("r+") as lf:
                             fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
                             entry.unlink(missing_ok=True)
                     except (OSError, BlockingIOError):
                         pass
@@ -172,11 +172,14 @@ def move_card(file_path: Path, target_dir: Path) -> Path:
             lock_path.unlink(missing_ok=True)
         return dest
 
-    with lock_path.open("w", encoding="utf-8") as lock_file:
-        lock_file.write(f"{os.getpid()}\n")
-        lock_file.flush()
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+    with os.fdopen(fd, "r+", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
+            lock_file.seek(0)
+            lock_file.truncate()
+            lock_file.write(f"{os.getpid()}\n")
+            lock_file.flush()
             _move_with_collision_check(file_path, dest, target_dir)
         finally:
             with contextlib.suppress(OSError):
@@ -200,12 +203,14 @@ def _move_with_collision_check(src: Path, dest: Path, target_dir: Path) -> None:
         finally:
             os.close(fd)
         Path(temp).rename(dest)
-        # fsync каталога
-        dir_fd = os.open(target_dir, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        # fsync каталога (пропускается на Windows, где os.open каталога не поддерживается)
+        if sys.platform != "win32":
+            with contextlib.suppress(OSError):
+                dir_fd = os.open(target_dir, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
         src.unlink()
     except BaseException:
         temp.unlink(missing_ok=True)

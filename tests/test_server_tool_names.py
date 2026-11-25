@@ -21,13 +21,13 @@ async def test_tool_names_match_schemas(tmp_path: Path) -> None:
     assert k_names == set(KNOWLEDGE_TOOLS_LIST)
     assert len(k_names) == 8
 
-    # 2. Audit Engine (12 tools)
+    # 2. Audit Engine (14 tools)
     a_server = create_audit_server(project_root=tmp_path)
     a_tools = await a_server.list_tools()
     a_names = {t.name for t in a_tools}
     assert a_names == set(AUDIT_TOOLS_LIST)
     assert a_names == set(get_audit_tool_schemas().keys())
-    assert len(a_names) == 12
+    assert len(a_names) == 14
     for name in a_names:
         assert not name.endswith("_tool")
 

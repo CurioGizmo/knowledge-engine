@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from mcp_audit import server as audit_server_module
+from mcp_core.db import cleanup_temp_dbs
 from mcp_skills import categories as categories_module
 from mcp_skills import project_context as pc_module
 from mcp_skills import server as skills_server_module
@@ -49,6 +50,7 @@ def _reset_server_singletons() -> Generator[None, None, None]:
         skills_server_module._BUNDLER = None
         skills_server_module._GIT_MGR = None
         skills_server_module.cleanup_unanchored_temp_dbs()
+        cleanup_temp_dbs()
         audit_server_module.reset_audit_singletons()
 
     _reset()
@@ -83,6 +85,7 @@ def get_companion_skills_dir() -> Path | None:
     candidates = [
         os.environ.get("MCP_SKILLS_TEST_CATALOG"),
         str(repo_root.parent / "mcp_skills"),
+        "/home/anton/projects/mcp_skills",
     ]
     for cand in candidates:
         if cand and Path(cand).is_dir() and (Path(cand) / "skills").is_dir():

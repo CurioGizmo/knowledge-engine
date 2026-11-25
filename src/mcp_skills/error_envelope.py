@@ -41,6 +41,7 @@ from mcp_skills.errors import (
     MaxExtensionDepthError,
     MissingRequiredBlockError,
     SessionConflictError,
+    SessionNotFoundError,
     SkillAlreadyExistsError,
     SkillNotFoundError,
     SkillsError,
@@ -83,6 +84,12 @@ SKILLS_ERROR_RULES: tuple[ErrorRule, ...] = (
         exc=InvalidSkillFormatError,
         error_type="InvalidSkillFormatError",
         reason="INVALID_SKILL_FORMAT",
+        log_template=None,
+    ),
+    ErrorRule(
+        exc=SessionNotFoundError,
+        error_type="SessionNotFoundError",
+        reason="SESSION_NOT_FOUND",
         log_template=None,
     ),
     ErrorRule(

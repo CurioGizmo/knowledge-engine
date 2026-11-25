@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from mcp_skills.errors import SessionConflictError
-from mcp_skills.flow_engine import GATE_REGISTRY, FlowEngine, GateResult, safe_read_text
+from mcp_skills.flow_engine import FlowEngine, VALIDATOR_REGISTRY, ValidationResult, safe_read_text
 from mcp_skills.models import FlowSession, FlowStage, FlowStageMeta, FlowStatus, FlowVerdict
 from mcp_skills.flow_storage import FlowStorage
 
@@ -19,24 +19,19 @@ _catalog = get_companion_skills_dir()
 CATALOG_DIR = (
     _catalog
     if _catalog is not None
-    else Path(
-        os.environ.get(
-            "MCP_SKILLS_TEST_CATALOG",
-            str(Path(__file__).resolve().parents[1].parent / "mcp_skills"),
-        )
-    )
+    else Path(os.environ.get("MCP_SKILLS_TEST_CATALOG", "/home/anton/projects/mcp_skills"))
 )
 
 
 def test_gate_registry_contains_validate_qa_report():
     """GATE_REGISTRY содержит шлюз validate_qa_report."""
-    assert "validate_qa_report" in GATE_REGISTRY
-    assert callable(GATE_REGISTRY["validate_qa_report"])
+    assert "validate_qa_report" in VALIDATOR_REGISTRY
+    assert callable(VALIDATOR_REGISTRY["validate_qa_report"])
 
 
 def test_validate_qa_report_missing_deliverable(tmp_path: Path):
     """Шлюз отклоняет отсутствие deliverable."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-session-1",
         project_root=str(tmp_path),
@@ -49,7 +44,7 @@ def test_validate_qa_report_missing_deliverable(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     res = gate_fn(session, stage, None, tmp_path, None)
@@ -59,7 +54,7 @@ def test_validate_qa_report_missing_deliverable(tmp_path: Path):
 
 def test_validate_qa_report_empty_content(tmp_path: Path):
     """Шлюз отклоняет пустой текст отчёта."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-session-1",
         project_root=str(tmp_path),
@@ -72,7 +67,7 @@ def test_validate_qa_report_empty_content(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     res = gate_fn(session, stage, "   ", tmp_path, None)
@@ -82,7 +77,7 @@ def test_validate_qa_report_empty_content(tmp_path: Path):
 
 def test_validate_qa_report_missing_checks_and_evidence(tmp_path: Path):
     """Шлюз отклоняет отчёт без перечня проверок и evidence."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-session-1",
         project_root=str(tmp_path),
@@ -95,7 +90,7 @@ def test_validate_qa_report_missing_checks_and_evidence(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     empty_report = "# Отчёт живой приёмки\nВсё проверено, всё работает. Вердикт: QA_PASSED."
@@ -106,7 +101,7 @@ def test_validate_qa_report_missing_checks_and_evidence(tmp_path: Path):
 
 def test_validate_qa_report_failed_checks_block_completion(tmp_path: Path):
     """Наличие FAILED проверок блокирует успешное прохождение гейта."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-session-1",
         project_root=str(tmp_path),
@@ -119,7 +114,7 @@ def test_validate_qa_report_failed_checks_block_completion(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     failed_report = """# Отчёт живой приёмки
@@ -138,7 +133,7 @@ def test_validate_qa_report_failed_checks_block_completion(tmp_path: Path):
 
 def test_validate_qa_report_blocked_checks_block_completion(tmp_path: Path):
     """Статус BLOCKED не допускает успешного завершения."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-session-1",
         project_root=str(tmp_path),
@@ -151,7 +146,7 @@ def test_validate_qa_report_blocked_checks_block_completion(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     blocked_report = """# Отчёт живой приёмки
@@ -170,7 +165,7 @@ def test_validate_qa_report_blocked_checks_block_completion(tmp_path: Path):
 
 def test_validate_qa_report_na_without_reason_blocked(tmp_path: Path):
     """Статус N/A без указания причины блокируется."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-session-1",
         project_root=str(tmp_path),
@@ -183,7 +178,7 @@ def test_validate_qa_report_na_without_reason_blocked(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     na_no_reason = """# Отчёт живой приёмки
@@ -205,7 +200,7 @@ def test_validate_qa_report_na_without_reason_blocked(tmp_path: Path):
 
 def test_validate_qa_report_valid_full_report_passes(tmp_path: Path):
     """Корректный отчёт со всеми проверками, evidence и обоснованным N/A проходит."""
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-session-1",
         project_root=str(tmp_path),
@@ -218,7 +213,7 @@ def test_validate_qa_report_valid_full_report_passes(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     valid_report = """# Отчёт живой приёмки
@@ -247,7 +242,7 @@ def test_validate_qa_report_gate_does_not_mutate_session_context(tmp_path: Path)
     в advance-логике после успешной проверки, вместе с атомарным
     update_session перехода.
     """
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-session-ctx",
         project_root=str(tmp_path),
@@ -261,7 +256,7 @@ def test_validate_qa_report_gate_does_not_mutate_session_context(tmp_path: Path)
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     # Проваленный отчёт (FAILED проверка)
@@ -285,7 +280,7 @@ def test_validate_qa_report_missing_session_id_blocked(tmp_path: Path):
     Отсутствие session_id — ошибка, а не разрешение принять старый отчёт
     (шаг 7, план строка 92).
     """
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-session-nosid",
         project_root=str(tmp_path),
@@ -298,7 +293,7 @@ def test_validate_qa_report_missing_session_id_blocked(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     # Полный корректный отчёт, но без упоминания session_id
@@ -322,7 +317,7 @@ def test_validate_qa_report_task_id_binding_not_accepted(tmp_path: Path):
     Отчёт, привязанный к task_id текущей сессии (а не к session.id),
     должен блокироваться (шаг 7, план строка 92).
     """
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="sess-A",
         task_id="task-X",
@@ -336,7 +331,7 @@ def test_validate_qa_report_task_id_binding_not_accepted(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     # Отчёт привязан к task_id текущей сессии, а не к session.id
@@ -390,7 +385,7 @@ def test_unknown_gate_rejected(tmp_path: Path):
         id="stage-1",
         title="Stage 1",
         instruction="Do something",
-        meta=FlowStageMeta(gate="non_existent_gate_123"),
+        meta=FlowStageMeta(validator="non_existent_gate_123"),
     )
 
     with pytest.raises(
@@ -552,7 +547,7 @@ def test_qa_report_row_with_empty_status_blocks(tmp_path: Path):
     Регрессия MAJOR из ревью: пустой res_cell не попадал ни в одну ветку
     и проходил молча — план требует распознанный непустой статус каждой строки.
     """
-    gate_fn = GATE_REGISTRY["validate_qa_report"]
+    gate_fn = VALIDATOR_REGISTRY["validate_qa_report"]
     session = FlowSession(
         id="qa-empty-status",
         project_root=str(tmp_path),
@@ -565,7 +560,7 @@ def test_qa_report_row_with_empty_status_blocks(tmp_path: Path):
         id="report_and_verdict",
         title="Отчёт",
         instruction="Save report",
-        meta=FlowStageMeta(gate="validate_qa_report", deliverable_must_exist=True),
+        meta=FlowStageMeta(validator="validate_qa_report", deliverable_must_exist=True),
     )
 
     report_empty_status = f"""# Отчёт живой приёмки

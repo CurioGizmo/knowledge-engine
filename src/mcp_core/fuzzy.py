@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from mcp_core.text import short_acronym_matches
+
 __all__ = [
     "FUZZY_CANDIDATE_LIMIT",
     "FUZZY_DOC_CHAR_CAP",
@@ -137,7 +139,7 @@ def jaccard_word_best(query_token: str, doc_text: str) -> float:
     text_len = len(doc_text)
     while pos < text_len:
         chunk = doc_text[pos : pos + chunk_size]
-        for w in re.findall(r"[A-Za-zА-Яа-я0-9_]+", chunk):
+        for w in re.findall(r"[A-Za-zА-Яа-яЁё0-9_]+", chunk):
             if len(w) < 3 or len(w) > max_word_len:
                 continue
             w_set = token_trigrams(w)
@@ -167,25 +169,3 @@ def jaccard_word_best(query_token: str, doc_text: str) -> float:
         pos += chunk_size - overlap
 
     return max_jaccard
-
-
-def short_acronym_matches(short_tokens: set[str], doc_blob: str) -> bool:
-    """Точное совпадение коротких акронимов с токенами документа (Ф5).
-
-    Поглощает байт-идентичную идиому из трёх пакетов (knowledge
-    ``_collect_short_acronym_knowledge``, audit ``_short_acronym_search``,
-    skills ``_collect_short_acronym_skills``): токенизация
-    ``[A-Za-zА-Яа-я0-9_-]+`` → lower → под-токены по ``-``/``_`` →
-    пересечение с ``short_tokens``.
-
-    Семантика knowledge/audit (только целые токены/под-токены, без
-    подстрочного канала). Skills сохраняет свой дополнительный
-    substr-канал локально (см. ``_collect_short_acronym_skills``) —
-    это осознанная доменная разница (план Ф5: substring остаётся).
-    """
-    doc_tokens = {tok.lower() for tok in re.findall(r"[A-Za-zА-Яа-я0-9_-]+", doc_blob)}
-    split_subtokens: set[str] = set()
-    for tok in doc_tokens:
-        if "-" in tok or "_" in tok:
-            split_subtokens.update(re.split(r"[-_]+", tok))
-    return bool(short_tokens & (doc_tokens | split_subtokens))

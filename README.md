@@ -9,15 +9,15 @@
 > A unified platform of three Model Context Protocol (MCP) servers: **knowledge**, **audit**, and **skills**. All data is stored directly in your Git repository as human-readable Markdown documents.
 
 [![Status: Public Beta](https://img.shields.io/badge/status-public--beta-orange.svg)](https://github.com/CurioGizmo/knowledge-engine)
-[![Version: v0.5.0](https://img.shields.io/badge/version-v0.5.0-blue.svg)](https://github.com/CurioGizmo/knowledge-engine/releases)
+[![Version: v0.6.0](https://img.shields.io/badge/version-v0.6.0-blue.svg)](https://github.com/CurioGizmo/knowledge-engine/releases)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![uv](https://img.shields.io/badge/uv-package%20manager-8A2BE2.svg)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/CurioGizmo/knowledge-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/CurioGizmo/knowledge-engine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 > [!NOTE]
-> **Public Beta (v0.5.0) / Early Preview**  
-> `knowledge-engine` is currently in active public beta testing. While the engine architecture is verified by a 1,500+ automated test suite, real-world agent workflows, developer experience, and integrations are being actively refined. Feedback, suggestions, and issue reports are very welcome!
+> **Public Beta (v0.6.0) / Early Preview**  
+> `knowledge-engine` is currently in active public beta testing. While the engine architecture is verified by a 1,600+ automated test suite, real-world agent workflows, developer experience, and integrations are being actively refined. Feedback, suggestions, and issue reports are very welcome!
 
 ---
 
@@ -49,6 +49,7 @@ Enforces engineering rigor and disciplined execution for complex initiatives:
 
 * **Step-by-Step Implementation Plans:** Instead of jumping into uncoordinated code edits, the agent first formulates a structured implementation plan with clear completion criteria.
 * **Sequential Step Execution & Proof of Work:** The agent progresses strictly step by step. Each completed step is logged with verifiable proof (test run logs, list of modified files) before moving to the next. Progress is transparent to humans and persists across session restarts.
+* **Plan Versioning & Safe Rollback (New in v0.6.0):** Plans are version-controlled with immutable revision history. Substantive definition changes automatically track revisions, and agents or humans can inspect diffs or safely roll back plans to previous versions with conflict detection.
 * **Technical Debt Dependency Graph (DAG):** Technical debt and tasks are recorded directly in the repository with dependency relationships (`blocked_by`). The agent automatically pulls only tasks whose prerequisites are completely resolved.
 * **Review History:** Code review remarks and feedback are attached to plans and tasks, creating a clear development audit trail.
 

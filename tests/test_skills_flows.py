@@ -14,11 +14,12 @@ from mcp_skills.errors import (
     GateValidationError,
     InvalidFlowFormatError,
     SessionConflictError,
+    SessionNotFoundError,
     SkillsError,
 )
 from mcp_skills.flow_engine import (
-    GATE_REGISTRY,
     FlowEngine,
+    VALIDATOR_REGISTRY,
     abort_flow,
     advance_flow,
     get_flow_status,
@@ -97,7 +98,7 @@ def test_parse_canonical_feature_delivery() -> None:
 
     assert flow.stages["spec_analysis"].meta.agent is None
     assert flow.stages["spec_analysis"].meta.require_human_confirm is True
-    assert flow.stages["plan_draft"].meta.gate == "validate_plan"
+    assert flow.stages["plan_draft"].meta.validator == "validate_plan"
     assert flow.stages["plan_draft"].meta.target_file == "implementation_plan.md"
     assert flow.stages["plan_draft"].meta.deliverable_must_exist is True
     assert flow.stages["plan_review_loop"].meta.agent == "plan-reviewer"
@@ -527,13 +528,18 @@ def test_skills_error_rules_order() -> None:
     """Проверяет, что новые ошибки флоу маппятся в envelope ДО базового SkillsError."""
     rule_types = [r.exc for r in SKILLS_ERROR_RULES]
 
+    idx_session_not_found = rule_types.index(SessionNotFoundError)
     idx_flow_not_found = rule_types.index(FlowNotFoundError)
     idx_flow_format = rule_types.index(InvalidFlowFormatError)
     idx_conflict = rule_types.index(SessionConflictError)
     idx_gate = rule_types.index(GateValidationError)
     idx_base = rule_types.index(SkillsError)
 
+    # SessionNotFoundError обязан предшествовать FlowNotFoundError (так как является его подклассом)
+    assert idx_session_not_found < idx_flow_not_found
+
     # Все специфичные правила обязаны предшествовать общему SkillsError
+    assert idx_session_not_found < idx_base
     assert idx_flow_not_found < idx_base
     assert idx_flow_format < idx_base
     assert idx_conflict < idx_base
@@ -542,11 +548,17 @@ def test_skills_error_rules_order() -> None:
     # Проверка вызова через envelope
     resp = _handle_tool_error(FlowNotFoundError("Сценарий не найден"), "test_tool")
     assert resp["error_type"] == "FlowNotFoundError"
+    assert resp["reason"] == "FLOW_NOT_FOUND"
     assert resp["status"] == "rejected"
+
+    resp_sess = _handle_tool_error(SessionNotFoundError("Сессия не найдена"), "test_tool")
+    assert resp_sess["error_type"] == "SessionNotFoundError"
+    assert resp_sess["reason"] == "SESSION_NOT_FOUND"
+    assert resp_sess["status"] == "rejected"
 
 
 def test_validate_plan_gate_safety_and_verification(tmp_path: Path) -> None:
-    from mcp_skills.flow_engine import validate_plan_gate
+    from mcp_skills.flow_engine import validate_plan
     from mcp_skills.models import FlowSession, FlowStage, FlowStageMeta
 
     session = FlowSession(
@@ -565,9 +577,7 @@ def test_validate_plan_gate_safety_and_verification(tmp_path: Path) -> None:
         instruction="Plan",
         meta=FlowStageMeta(target_file="../outside.md"),
     )
-    res_traversal = validate_plan_gate(
-        session, stage_traversal, deliverable=None, project_root=tmp_path
-    )
+    res_traversal = validate_plan(session, stage_traversal, deliverable=None, project_root=tmp_path)
     assert res_traversal.passed is False
     assert any("не найден" in b for b in res_traversal.blockers)
 
@@ -578,9 +588,7 @@ def test_validate_plan_gate_safety_and_verification(tmp_path: Path) -> None:
         instruction="Plan",
         meta=FlowStageMeta(target_file="missing_plan.md"),
     )
-    res_missing = validate_plan_gate(
-        session, stage_missing, deliverable=None, project_root=tmp_path
-    )
+    res_missing = validate_plan(session, stage_missing, deliverable=None, project_root=tmp_path)
     assert res_missing.passed is False
     assert any("не найден" in b for b in res_missing.blockers)
 
@@ -590,7 +598,7 @@ def test_validate_plan_gate_safety_and_verification(tmp_path: Path) -> None:
         title="Draft",
         instruction="Plan",
     )
-    res_empty = validate_plan_gate(session, stage_generic, deliverable="   ", project_root=tmp_path)
+    res_empty = validate_plan(session, stage_generic, deliverable="   ", project_root=tmp_path)
     assert res_empty.passed is False
     assert any("пуст" in b for b in res_empty.blockers)
 
@@ -602,7 +610,7 @@ def test_validate_plan_gate_safety_and_verification(tmp_path: Path) -> None:
         instruction="Plan",
         meta=FlowStageMeta(target_file="plan.md"),
     )
-    res_valid = validate_plan_gate(session, stage_valid, deliverable=None, project_root=tmp_path)
+    res_valid = validate_plan(session, stage_valid, deliverable=None, project_root=tmp_path)
     assert res_valid.passed is True
     assert res_valid.blockers == []
 
@@ -715,7 +723,7 @@ Instruction 2
 Instruction 3
 
 ## 4. Stage Combined [id: s_combined]
-<!-- meta: {"gate": "validate_plan", "target_file": "plan.md", "require_verdict": true} -->
+<!-- meta: {"validator": "validate_plan", "target_file": "plan.md", "require_verdict": true} -->
 Instruction 4
 """
     (flows_dir / "gate-flow.md").write_text(flow_content, encoding="utf-8")
@@ -869,3 +877,19 @@ def test_list_available_flows_intent_group_and_when_to_use(tmp_path: Path) -> No
     assert feat["intent_group"] == "feature-delivery"
     assert isinstance(feat["when_to_use"], list)
     assert len(feat["when_to_use"]) >= 1
+
+
+def test_validator_registry() -> None:
+    """Проверяет регистрацию валидаторов в VALIDATOR_REGISTRY."""
+    from mcp_skills import flow_engine
+    from mcp_skills.models import FlowStageMeta
+
+    meta = FlowStageMeta(validator="validate_plan")
+    assert meta.validator == "validate_plan"
+    dump = meta.model_dump()
+    assert dump.get("validator") == "validate_plan"
+    assert "gate" not in dump
+
+    assert "validate_plan" in flow_engine.VALIDATOR_REGISTRY
+    assert "validate_qa_report" in flow_engine.VALIDATOR_REGISTRY
+    assert "validate_review" in flow_engine.VALIDATOR_REGISTRY

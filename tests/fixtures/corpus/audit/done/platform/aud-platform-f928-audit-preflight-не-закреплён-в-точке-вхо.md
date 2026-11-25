@@ -6,7 +6,7 @@ priority: important
 autonomy: high
 complexity: M
 status: completed
-target_file: /home/user/.agents/skills/skills-flow/SKILL.md
+target_file: /home/anton/.agents/skills/skills-flow/SKILL.md
 symbol: Вход в процесс и границы обсуждения
 task_id: unified-review-execute-flows
 created_at: '2026-10-28'

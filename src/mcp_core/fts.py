@@ -4,20 +4,18 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Callable
 
 logger = logging.getLogger("mcp_core.fts")
 
 __all__ = [
     "SCHEMA_VERSION",
-    "ensure_schema",
     "fts5_table_sql",
     "resolve_tokenizer",
     "round_bm25_score",
 ]
 
 # Целевая версия схемы FTS5 (v4).
-# Рантайм-версионирование схемы подключено через PRAGMA user_version / ensure_schema
+# Рантайм-версионирование схемы подключено через PRAGMA user_version / ensure_storage_schema
 # во всех поисковых хранилищах (mcp_knowledge, mcp_skills, mcp_audit).
 # v4 (R6, 2026-10-19): изменение нормализации токенов стеммера (запрет среза
 # -ат/-ят; одиночные гласные не срезаются 2-м проходом) меняет содержимое
@@ -107,35 +105,3 @@ def fts5_table_sql(
     body_items = col_defs + options
     body = ",\n    ".join(body_items)
     return f"CREATE VIRTUAL TABLE IF NOT EXISTS {table} USING fts5(\n    {body}\n);"
-
-
-def ensure_schema(
-    conn: sqlite3.Connection,
-    *,
-    version: int,
-    rebuild: Callable[[sqlite3.Connection], None],
-) -> None:
-    """Проверяет PRAGMA user_version и атомарно выполняет rebuild при несовпадении.
-
-    Использует conn.isolation_level = None с явным BEGIN IMMEDIATE / COMMIT / ROLLBACK.
-    """
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA user_version;")
-    row = cursor.fetchone()
-    current_version = row[0] if row else 0
-
-    if current_version == version:
-        return
-
-    old_isolation = conn.isolation_level
-    conn.isolation_level = None
-    try:
-        cursor.execute("BEGIN IMMEDIATE;")
-        rebuild(conn)
-        cursor.execute(f"PRAGMA user_version = {version};")
-        cursor.execute("COMMIT;")
-    except Exception:
-        cursor.execute("ROLLBACK;")
-        raise
-    finally:
-        conn.isolation_level = old_isolation

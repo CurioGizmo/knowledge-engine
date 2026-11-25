@@ -7,11 +7,11 @@ __all__ = ["get_audit_help_text"]
 HELP_DOCS: dict[str, str] = {
     "overview": """# MCP Audit Engine — Overview
 
-Operational tracker for development plans, code reviews and technical debt (11 tools).
+Operational tracker for development plans, code reviews and technical debt (13 operational tools + get_help).
 
 Tool groups:
 - Debt: check_known_debt, get_ready_backlog, search_debt, record_debt, update_debt_status
-- Plans: record_plan, update_plan, step_plan
+- Plans: record_plan, update_plan, step_plan, get_plan_versions, restore_plan_version
 - Reviews & context: record_review, get_task_context
 - Unified search: search_artifacts
 
@@ -80,10 +80,13 @@ Example: record_plan(task_id="PROJ-142", title="OAuth2", steps=["1. TokenProvide
 """,
     "update_plan": """# update_plan
 
-Purpose: update plan metadata — approval, cancellation, title, PR URL, added steps.
-When to call: to approve a plan (status="approved"), attach a PR URL, or cancel.
-Key params: task_id, title, add_steps, target_files, status, pr_url.
+Purpose: update plan metadata — approval, cancellation, title, PR URL, added/replaced steps or details.
+When to call: to approve a plan (status="approved"), attach a PR URL, or modify definition.
+Key params: task_id, title, add_steps, target_files, status, pr_url, replace_details, replace_steps, expected_version, reopen, reset_progress, reason.
 Plan statuses: discussed, approved, in_progress, done, cancelled; an invalid value is a validation error.
+Substantive edits on approved/in_progress plans automatically return them to discussed.
+Edits on DONE plans require reopen=True (otherwise PLAN_REOPEN_REQUIRED).
+Replacing steps with recorded progress requires reset_progress=True (otherwise PROGRESS_CONFLICT).
 Example: update_plan(task_id="PROJ-142", status="approved", pr_url="https://github.com/org/repo/pull/85")
 """,
     "step_plan": """# step_plan
@@ -92,6 +95,25 @@ Purpose: check/uncheck a plan step checkbox and log a dated note — no manual M
 When to call: MANDATORY when closing a plan step, instead of editing the Markdown file by hand.
 Key params: task_id, step (index), status ("done" | "open"), note, allow_out_of_order.
 Example: step_plan(task_id="PROJ-142", step=1, note="Unit tests green")
+""",
+    "get_plan_versions": """# get_plan_versions
+
+Purpose: view substantive revision history of a plan card (versions list, snapshot, or unified diff).
+When to call: to inspect prior plan revisions, view exact snapshots, or compare definition changes.
+Key params: task_id (required), category, view ("list" | "show" | "diff"), version, compare_to, limit (1..100).
+Snapshot scope: snapshots strictly store the plan card itself (.agents/plans/...); external documents in repository branches are NOT included (A8).
+History recovery: if the history directory is missing or empty, requesting an older version returns PLAN_VERSION_NOT_FOUND (history is not automatically restored from git).
+Example: get_plan_versions(task_id="PROJ-142", view="list")
+""",
+    "restore_plan_version": """# restore_plan_version
+
+Purpose: safe rollback of a plan definition to an earlier revision, creating a new revision v(N+1).
+When to call: to safely restore an earlier revision of a plan card without losing revision history.
+Key params: task_id (required), version (required), expected_version (required), expected_state_etag (required), reason (required, non-empty), reset_progress (bool), reopen (bool), category.
+Snapshot scope: snapshots strictly store the plan card itself (.agents/plans/...); external documents in repository branches are NOT included (A8).
+History integrity: all versions v1..vN must exist and parse; otherwise VERSION_HISTORY_CORRUPTED.
+Safety: rejects on ETag mismatch (STATE_ETAG_CONFLICT), version mismatch (VERSION_CONFLICT), unconfirmed DONE plan (PLAN_REOPEN_REQUIRED), or progress conflict (PROGRESS_CONFLICT) unless reset_progress=True.
+Example: restore_plan_version(task_id="PROJ-142", version=1, expected_version=2, expected_state_etag="...", reason="Rollback to v1")
 """,
     "record_review": """# record_review
 
@@ -130,6 +152,11 @@ _ALIASES: dict[str, str] = {
     "known": "check_known_debt",
     "backlog": "get_ready_backlog",
     "plan": "record_plan",
+    "plan_versions": "get_plan_versions",
+    "versions": "get_plan_versions",
+    "restore": "restore_plan_version",
+    "restore_version": "restore_plan_version",
+    "restore_plan": "restore_plan_version",
     "review": "record_review",
     "context": "get_task_context",
     "search": "search_artifacts",

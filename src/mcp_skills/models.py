@@ -314,7 +314,7 @@ class FlowStageMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent: str | None = None
-    gate: str | None = None
+    validator: str | None = None
     target_file: str | None = None
     loop_max: int = 3
     dispatch_agents: bool = False

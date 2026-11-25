@@ -212,6 +212,48 @@ def test_plan_lock_is_advisory_no_unlink(plan_env) -> None:
     assert lock_path.exists()
 
 
+def test_advisory_lock_msvcrt_branch(plan_env, monkeypatch) -> None:
+    """Проверяет ветку Windows msvcrt в _advisory_lock при отсутствии fcntl."""
+    from unittest.mock import MagicMock
+    import mcp_audit.synchronizer as sync_mod
+
+    _, _, sync = plan_env
+    lock_path = sync.plans_dir / ".locks" / "test_msvcrt.lock"
+
+    mock_msvcrt = MagicMock()
+    mock_msvcrt.LK_LOCK = 1
+    mock_msvcrt.LK_UNLCK = 2
+
+    monkeypatch.setattr(sync_mod, "fcntl", None)
+    monkeypatch.setattr(sync_mod, "_import_msvcrt", lambda: mock_msvcrt)
+
+    with sync_mod._advisory_lock(lock_path):
+        assert lock_path.exists()
+        assert mock_msvcrt.locking.call_count == 1
+        call_args = mock_msvcrt.locking.call_args_list[0]
+        assert call_args[0][1] == mock_msvcrt.LK_LOCK
+        assert call_args[0][2] == 1
+
+    assert mock_msvcrt.locking.call_count == 2
+    unlock_call_args = mock_msvcrt.locking.call_args_list[1]
+    assert unlock_call_args[0][1] == mock_msvcrt.LK_UNLCK
+    assert unlock_call_args[0][2] == 1
+
+
+def test_advisory_lock_no_lock_provider(plan_env, monkeypatch) -> None:
+    """Проверяет graceful fallback _advisory_lock, когда ни fcntl, ни msvcrt недоступны."""
+    import mcp_audit.synchronizer as sync_mod
+
+    _, _, sync = plan_env
+    lock_path = sync.plans_dir / ".locks" / "test_no_provider.lock"
+
+    monkeypatch.setattr(sync_mod, "fcntl", None)
+    monkeypatch.setattr(sync_mod, "_import_msvcrt", lambda: None)
+
+    with sync_mod._advisory_lock(lock_path):
+        pass
+
+
 def test_concurrent_save_plan_no_loss(plan_env) -> None:
     """A2: конкурентные записи одного task_id — один created, остальные PLAN_EXISTS.
 

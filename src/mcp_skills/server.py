@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import atexit
-import contextlib
 import json
 import logging
 import re
@@ -18,7 +16,13 @@ from typing import Any, Literal
 import yaml
 from mcp.server.mcpserver import MCPServer
 
+from mcp_core.db import (
+    _TEMP_DBS,
+    cleanup_temp_dbs,
+    register_temp_db,
+)
 from mcp_core.paths import (
+    BLOCKLIST_ROOTS,
     ResolvedRoot,
     SessionProjectMismatchError,
     _find_default_project_root,
@@ -33,13 +37,14 @@ from mcp_core.paths import (
     resolve_skills_repo_dir,
 )
 from mcp_core.service_pool import ProjectServicePool
+from mcp_core.text import word_overlap as _word_overlap
 from mcp_core.tool_contract import PROJECT_PATH_PARAM, adapt_project_path_signature
 from mcp_skills.bundler import AgentBundler, create_default_override
 from mcp_skills.creator import create_skill
 from mcp_skills.error_envelope import _handle_tool_error as _handle_tool_error
 from mcp_skills.error_envelope import _make_error_response as _make_error_response
 from mcp_skills.error_envelope import _tool_error_guard as _tool_error_guard
-from mcp_skills.errors import FlowNotFoundError, SkillNotFoundError
+from mcp_skills.errors import SessionNotFoundError, SkillNotFoundError
 from mcp_skills.flow_engine import (
     abort_flow,
     advance_flow,
@@ -51,7 +56,7 @@ from mcp_skills.flow_engine import (
 )
 from mcp_skills.flow_fts import build_flow_fts_index, fts_bonus_rank
 from mcp_skills.flow_parser import list_available_flows
-from mcp_skills.flow_storage import FlowStorage
+from mcp_skills.flow_storage import FlowSession, FlowStorage
 from mcp_skills.git_manager import GitSkillsManager
 from mcp_skills.help_docs import get_skills_help_text
 from mcp_skills.installer import SKILLS_INSTRUCTIONS
@@ -114,23 +119,8 @@ _GIT_MGR: GitSkillsManager | None = None
 _BUNDLER: AgentBundler | None = None
 
 # Реестр эфемерных баз SQLite для незакреплённых корней (авто-очистка при выходе)
-_UNANCHORED_TEMP_DBS: set[Path] = set()
-
-
-def cleanup_unanchored_temp_dbs() -> None:
-    """Удаляет зарегистрированные эфемерные базы для незакреплённых корней."""
-    for db_file in list(_UNANCHORED_TEMP_DBS):
-        for path in (
-            db_file,
-            db_file.with_name(f"{db_file.name}-wal"),
-            db_file.with_name(f"{db_file.name}-shm"),
-        ):
-            with contextlib.suppress(Exception):
-                path.unlink(missing_ok=True)
-    _UNANCHORED_TEMP_DBS.clear()
-
-
-atexit.register(cleanup_unanchored_temp_dbs)
+_UNANCHORED_TEMP_DBS = _TEMP_DBS
+cleanup_unanchored_temp_dbs = cleanup_temp_dbs
 
 # Кэш значений стека (stack_values) per-storage. Ключ — (сигнатура file_sync,
 # mtime stack-conventions.yaml). Синхронизатор обновляет file_sync при любых
@@ -347,12 +337,6 @@ def install_agent_workflow(
     return bnd.install_workflow(name=name, target=target, project_root=root, project=project)
 
 
-def _word_overlap(w1: str, w2: str) -> bool:
-    if not w1 or not w2:
-        return False
-    return (w1 == w2) or ((w1.startswith(w2) or w2.startswith(w1)) and min(len(w1), len(w2)) >= 3)
-
-
 def _score_alias_matches(w: str, aliases_list: list[str]) -> int:
     """Оценка совпадения слова запроса с объявленными алиасами сценария.
 
@@ -363,11 +347,17 @@ def _score_alias_matches(w: str, aliases_list: list[str]) -> int:
     """
     alias_hit = False
     prefix_hit = False
+    is_short = len(w) < 3
     for alias in aliases_list:
-        alias_words = [re.sub(r"[^\w]+", "", aw).lower() for aw in alias.split() if len(aw) >= 3]
+        alias_words = [
+            tok.lower()
+            for aw in alias.split()
+            if (tok := re.sub(r"[^\w]+", "", aw))
+            and (len(tok) >= 3 or (is_short and len(tok) == 2))
+        ]
         if w in alias_words:
             alias_hit = True
-        elif any(_word_overlap(w, aw) for aw in alias_words):
+        elif not is_short and any(_word_overlap(w, aw) for aw in alias_words):
             prefix_hit = True
     if alias_hit:
         return 6
@@ -412,26 +402,41 @@ def _score_one_flow(f: dict[str, Any], clean_query: str, q_words: list[str]) -> 
             return 0
 
     score = 0
-    if clean_query.lower() in title_text or clean_query.lower() in name_text:
-        score += 20
-    elif clean_query.lower() in aliases_blob:
-        score += 15
-    elif clean_query.lower() in desc_text:
-        score += 10
+    clean_lower_stripped = clean_lower.strip()
+    if len(clean_lower_stripped) >= 3:
+        if clean_lower in title_text or clean_lower in name_text:
+            score += 20
+        elif clean_lower in aliases_blob:
+            score += 15
+        elif clean_lower in desc_text:
+            score += 10
 
-    # Прямое совпадение фразы запроса с intent_group (например «plan-execution»)
-    if clean_query.lower() in group_text:
-        score += 8
+        # Прямое совпадение фразы запроса с intent_group (например «plan-execution»)
+        if clean_lower in group_text:
+            score += 8
+
+    title_words = [w for w in re.split(r"[^\w]+", title_text) if len(w) >= 2]
+    name_words = [w for w in re.split(r"[^\w]+", name_text) if len(w) >= 2]
+    desc_words = [w for w in re.split(r"[^\w]+", desc_text) if len(w) >= 2]
+
+    when_words = set(re.findall(r"\w+", when_blob))
 
     for w in q_words:
-        # Прямые совпадения слова
-        if w in title_text:
+        # Короткие токены (< 3) проверяем строго по границам слов, чтобы «qa»/«or»/«it» не давали ложных подстрочных хитов.
+        is_short = len(w) < 3
+        if (not is_short and w in title_text) or any(
+            (w == tw if is_short else _word_overlap(w, tw)) for tw in title_words
+        ):
             score += 5
-        if w in name_text:
+        if (not is_short and w in name_text) or any(
+            (w == nw if is_short else _word_overlap(w, nw)) for nw in name_words
+        ):
             score += 4
-        if w in desc_text:
-            score += 1
-        if not when_matched and w in when_blob:
+        if (not is_short and w in desc_text) or any(
+            (w == dw if is_short else _word_overlap(w, dw)) for dw in desc_words
+        ):
+            score += 2
+        if not when_matched and (w in when_words if is_short else w in when_blob):
             when_matched = True
             score += 5
         # E2-4: слово запроса совпало с intent_group флоу
@@ -442,23 +447,33 @@ def _score_one_flow(f: dict[str, Any], clean_query: str, q_words: list[str]) -> 
     return score
 
 
+def _flow_structural_short_terms(flow_list: list[dict[str, Any]]) -> set[str]:
+    """Извлекает 2-символьные термины только из структурных идентификаторов флоу (name, intent_group).
+
+    Поле aliases намеренно не сканируется, так как содержит естественные фразы с предлогами («на», «по», «to»).
+    """
+    terms: set[str] = set()
+    for f in flow_list:
+        for src in (str(f.get("name") or ""), str(f.get("intent_group") or "")):
+            for tok in re.findall(r"[^\W_]+", src.lower()):
+                if len(tok) == 2:
+                    terms.add(tok)
+    return terms
+
+
 def _score_flows(
     flow_list: list[dict[str, Any]],
     clean_query: str,
     fts_bonuses: dict[str, float] | None = None,
 ) -> tuple[list[dict[str, Any]], list[tuple[float, dict[str, Any]]]]:
-    """Ранжирует сценарии по запросу; ``fts_bonuses`` уточняет порядок.
-
-    ``fts_bonuses`` применяется ТОЛЬКО к сценариям, которые пословный скоринг
-    уже признал релевантными (score > 0) — то есть переставляет порядок, но не
-    расширяет выдачу. Замер на 31 релевантном и 24 «нейтральных» запросах:
-    перестановка поднимает top-1 с 61 % до 84 % и снижает ложный арбитраж с
-    5/31 до 2/31, при этом среднее число кандидатов на нейтральном запросе
-    остаётся 0.38. Расширение выдачи силами FTS (OR-по-триграммам слишком
-    мягкое) дало бы +1 случай на бенчмарке ценой 5.79 кандидатов на нейтральном
-    запросе — это распыление каталога и ложные вопросы пользователю.
-    """
-    q_words = [re.sub(r"[^\w]+", "", w).lower() for w in clean_query.split() if len(w) >= 3]
+    """Ранжирует сценарии по запросу; ``fts_bonuses`` уточняет порядок."""
+    raw_parts = [re.sub(r"[^\w]+", "", w) for w in clean_query.split()]
+    flow_short_terms = _flow_structural_short_terms(flow_list)
+    q_words = [
+        w.lower()
+        for w in raw_parts
+        if len(w) >= 3 or (len(w) == 2 and w.lower() in flow_short_terms)
+    ]
 
     scored_flows: list[tuple[float, dict[str, Any]]] = []
     for f in flow_list:
@@ -1205,7 +1220,7 @@ def create_server(
 
                 h = hashlib.sha256(str(r).encode()).hexdigest()[:12]
                 target_db = Path(tempfile.gettempdir()) / f"mcp_skills_unanchored_{h}.db"
-                _UNANCHORED_TEMP_DBS.add(target_db)
+                register_temp_db(target_db)
 
             store = SkillsStorage(target_db)
             sync = get_synchronizer(r, store, skills_dir=skills_dir)
@@ -1460,17 +1475,59 @@ def _register_create_skill_tool(
 
 def _register_get_help_tool(server: MCPServer) -> None:
     @server.tool(name="get_help")
-    def get_help_tool(tool_name: str | None = "overview") -> str:
+    @_tool_error_guard("get_help")
+    def get_help_tool(tool_name: str | None = "overview") -> Any:
         """Detailed help, protocols, and tutorials for skills-engine tools.
 
         Trigger: Call when uncertain about skill structure, stack values, or authoring guidelines.
         Example: get_help(tool_name="create_skill") — authoring tutorial; get_help() — overview.
         """
+        return get_skills_help_text(tool_name)
+
+
+def _locate_flow_session(
+    resolved_root: Path,
+    session_id: str | None,
+) -> tuple[FlowSession | None, Path]:
+    """Ищет сессию flow в resolved_root или вверх по дереву каталогов проекта."""
+    if session_id is None:
+        flow_db = get_cache_dir(resolved_root) / "flows.db"
+        if flow_db.exists():
+            return None, resolved_root
+
+        for parent in resolved_root.parents:
+            try:
+                res_parent = parent.resolve()
+            except OSError:
+                break
+            if res_parent in BLOCKLIST_ROOTS:
+                break
+            parent_db = get_cache_dir(parent) / "flows.db"
+            if parent_db.exists():
+                return None, parent
+
+        return None, resolved_root
+
+    flow_db = get_cache_dir(resolved_root) / "flows.db"
+    if flow_db.exists():
+        session = FlowStorage(project_root=resolved_root).get_session(session_id)
+        if session is not None:
+            return session, resolved_root
+
+    for parent in resolved_root.parents:
         try:
-            return get_skills_help_text(tool_name)
-        except Exception as e:
-            logger.exception("Ошибка при получении справки по '%s': %s", tool_name, e)
-            return f"⚠️ Ошибка при получении справки по '{tool_name}': {e}"
+            res_parent = parent.resolve()
+        except OSError:
+            break
+        if res_parent in BLOCKLIST_ROOTS:
+            break
+        parent_db = get_cache_dir(parent) / "flows.db"
+        if parent_db.exists():
+            session = FlowStorage(project_root=parent).get_session(session_id)
+            if session is not None:
+                return session, parent
+
+    return None, resolved_root
 
 
 def _register_step_flow_tool(
@@ -1494,6 +1551,7 @@ def _register_step_flow_tool(
         notes: str = "",
         human_confirmed: bool = False,
         target: Literal["antigravity", "cursor", "opencode", "prompt"] | None = None,
+        task_id: str | None = None,
         project_path: PROJECT_PATH_PARAM = None,
     ) -> dict[str, Any]:
         """Unified facade for lifecycle management and state machine execution of development flows (Flow Runner).
@@ -1508,6 +1566,7 @@ def _register_step_flow_tool(
         In multi-workspace or global mode, always pass project_path="<project_root>".
         After start, pass session_id from response; for advance — expected_stage_id from current stage.id.
         flow_options — configuration for new session, e.g. autonomy and scheduling for execute-plan-flow.
+        task_id — task identifier when starting a new session (used for orchestration tracker slug).
         transition — name of allowed transition for current stage when action='advance';
         use to explicitly choose path or repeat stage within session.
         human_confirmed=True — explicit human confirmation for stages requiring require_human_confirm (D4).
@@ -1517,32 +1576,35 @@ def _register_step_flow_tool(
         if action != "status":
             ensure_root_anchored(write_ok, resolved)
 
-        flow_db_path = get_cache_dir(resolved.root) / "flows.db"
-        if not flow_db_path.exists() and action == "status":
-            if session_id is not None:
-                raise FlowNotFoundError(f"Сессия '{session_id}' не найдена")
-            res: dict[str, Any] = {
-                "status": "no_active_session",
-                "message": "Активных сессий флоу для данного проекта/ветки не найдено.",
-                "project_root": str(resolved.root),
-                "root_source": resolved.source,
-                "required_inputs": [],
-                "next_call": None,
-            }
-            if not write_ok:
-                res["root_warning"] = (
-                    f"Корень проекта не закреплён (source={resolved.source}): "
-                    "запись отклоняется ROOT_NOT_ANCHORED."
-                )
-            return res
+        session, actual_project_root = _locate_flow_session(resolved.root, session_id)
 
-        if session_id is not None and flow_db_path.exists():
-            flow_store = FlowStorage(project_root=resolved.root)
-            session = flow_store.get_session(session_id)
-            if (
-                session is not None
-                and Path(session.project_root).resolve() != resolved.root.resolve()
-            ):
+        if action == "status":
+            flow_db_path = get_cache_dir(actual_project_root) / "flows.db"
+            if not flow_db_path.exists():
+                if session_id is not None:
+                    raise SessionNotFoundError(f"Сессия '{session_id}' не найдена")
+                res: dict[str, Any] = {
+                    "status": "no_active_session",
+                    "message": "Активных сессий флоу для данного проекта/ветки не найдено.",
+                    "project_root": str(resolved.root),
+                    "root_source": resolved.source,
+                    "required_inputs": [],
+                    "next_call": None,
+                }
+                if not write_ok:
+                    res["root_warning"] = (
+                        f"Корень проекта не закреплён (source={resolved.source}): "
+                        "запись отклоняется ROOT_NOT_ANCHORED."
+                    )
+                return res
+
+            if session_id is not None and session is None:
+                raise SessionNotFoundError(f"Сессия '{session_id}' не найдена")
+
+        if session is not None:
+            sess_root = Path(session.project_root).resolve()
+            res_root = resolved.root.resolve()
+            if sess_root != res_root and sess_root not in res_root.parents:
                 raise SessionProjectMismatchError(
                     f"Сессия '{session_id}' принадлежит проекту '{session.project_root}', "
                     f"но вызов адресован '{resolved.root}'."
@@ -1561,7 +1623,8 @@ def _register_step_flow_tool(
             notes=notes,
             human_confirmed=human_confirmed,
             target=target,
-            project_root=resolved.root,
+            task_id=task_id,
+            project_root=actual_project_root,
             bundler=bundle.bundler,
             skills_storage=bundle.storage,
             skills_dir=skills_repo_dir,

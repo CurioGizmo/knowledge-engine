@@ -6,13 +6,12 @@ category: backend
 priority: suggestion
 autonomy: high
 complexity: L
-status: planned
+status: completed
 target_file: src/mcp_audit/server.py
 symbol: record_debt
 created_at: '2026-11-09'
-updated_at: '2026-11-09'
+updated_at: '2026-11-25'
 ---
-
 # aud-backend-66e1: Дедуп record_debt не нормализует target_file кандидатов — легаси-карточки с backslash-путями обходят гейт
 
 ## ❌ Симптом
@@ -23,3 +22,6 @@ updated_at: '2026-11-09'
 
 ## 🛠 Предлагаемое решение
 Нормализовать cand_target при сравнении в дедуп-цикле (та же замена разделителей + свёртка «./»), либо запланировать миграцию легаси-значений при следующем пересборе индекса.
+
+## ✅ Фактическое решение (Actual resolution)
+- 2026-11-25: Исправлено ранее: record_debt в src/mcp_audit/handlers/debt.py:157-177,311-313 нормализует target_file кандидатов через _normalize_target_file_for_cmp.

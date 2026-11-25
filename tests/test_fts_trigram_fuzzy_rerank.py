@@ -267,14 +267,20 @@ def test_fuzzy_only_as_fallback(tmp_path: Path) -> None:
         )
     storage.sync()
 
-    with patch.object(
-        k_storage, "jaccard_word_best", wraps=k_storage.jaccard_word_best
-    ) as mock_jaccard:
+    with (
+        patch.object(
+            k_storage, "jaccard_word_best", wraps=k_storage.jaccard_word_best
+        ) as mock_jaccard,
+        patch(
+            "mcp_knowledge.search_scoring.jaccard_word_best", wraps=k_storage.jaccard_word_best
+        ) as mock_scoring_jaccard,
+    ):
         # Запрашиваем 2 хита при наличии 3 точных
         res = storage.search(query="redis", limit=2)
         assert len(res) == 2
         # jaccard_word_best не должен вызываться, так как MATCH вернул >= limit
         assert mock_jaccard.call_count == 0
+        assert mock_scoring_jaccard.call_count == 0
 
 
 def test_fuzzy_dedup_match_wins(tmp_path: Path) -> None:

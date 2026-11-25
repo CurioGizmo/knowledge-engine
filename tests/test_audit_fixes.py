@@ -157,14 +157,15 @@ def test_sanitizer_dot_expressions_and_new_acronyms():
     assert "sqlite3*" in sanitized_dot
     assert "OperationalError*" in sanitized_dot
 
-    # Акронимы go, js, ts, бд не должны отбрасываться
-    query_acronyms = "go channel js event ts types бд sqlite"
+    # Акронимы GO (верхний регистр), js, ts, бд, дб (консонантные без словарей) не должны отбрасываться
+    query_acronyms = "GO channel js event ts types бд дб sqlite"
     sanitized_acronyms = sanitize_fts_query(query_acronyms)
-    tokens = [t.strip('* "') for t in sanitized_acronyms.split(" OR ")]
+    tokens = [t.strip('* "').lower() for t in sanitized_acronyms.split(" OR ")]
     assert "go" in tokens
     assert "js" in tokens
     assert "ts" in tokens
     assert "бд" in tokens
+    assert "дб" in tokens
 
 
 def test_fuzzy_duplicate_detection_threshold(tmp_path: Path):

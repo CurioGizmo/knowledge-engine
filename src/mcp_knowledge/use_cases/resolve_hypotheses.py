@@ -504,6 +504,38 @@ class ResolveHypothesesUseCase:
             "superseded_by": target_id,
         }
 
+    def _apply_single_resolution(
+        self,
+        res: HypothesisResolution,
+        today_str: str,
+    ) -> dict[str, Any]:
+        """Применяет резолюцию для одной карточки под локом с перечитыванием состояния."""
+        with self.repo.card_lock(res.id):
+            current_file = self.repo.find_card_file(res.id)
+            if current_file is None:
+                raise CardNotFoundError(f"Карточка-гипотеза '{res.id}' удалена между проходами")
+            fm, sections = self.repo.read_card_file(current_file)
+            if fm.status != KnowledgeStatus.HYPOTHESIS:
+                raise ValueError(
+                    f"Карточка '{res.id}' больше не является рабочей гипотезой "
+                    f"(текущий статус: '{fm.status.value}'): конкурентная резолюция "
+                    "опередила этот батч."
+                )
+            if fm.source == KnowledgeSource.USER_CONFIRMED:
+                raise ForbiddenUserConfirmedActionError(
+                    f"Карточка '{res.id}' подтверждена пользователем (user_confirmed) "
+                    "и не может быть изменена или удалена через resolve_hypotheses."
+                )
+            if res.action == "confirm":
+                return self._resolve_confirm(current_file, fm, sections, res, today_str)
+            if res.action == "refute":
+                return self._resolve_refute(current_file, fm, sections, res, today_str)
+            if res.action == "drop":
+                return self._resolve_drop(res)
+            if res.action == "duplicate":
+                return self._resolve_duplicate(current_file, fm, sections, res, today_str)
+            raise ValueError(f"Неизвестное действие резолюции: '{res.action}'")
+
     def execute(self, req: HypothesesResolveRequest) -> dict[str, Any]:
         """Выполняет двухпроходное подведение итогов по гипотезам (Pass 1: Validate, Pass 2: Apply)."""
         today_str = date.today().isoformat()
@@ -529,47 +561,48 @@ class ResolveHypothesesUseCase:
         # потребовал бы разрушения двухпроходного контракта batch-атомарности,
         # поэтому: card_lock + перечитывание.
         details: list[dict[str, Any]] = []
-        for res, card_file, fm, sections in validated:
-            with self.repo.card_lock(res.id):
-                # Перечитываем состояние под локом (снимки Pass 1 устарели)
-                current_file = self.repo.find_card_file(res.id)
-                if current_file is None:
-                    raise CardNotFoundError(f"Карточка-гипотеза '{res.id}' удалена между проходами")
-                fm, sections = self.repo.read_card_file(current_file)
-                card_file = current_file
-                # Ревью шага 3: снимок Pass 1 устарел не только по контенту —
-                # конкурентный refute/confirm/duplicate мог уже закрыть
-                # карточку. Повторная проверка статуса и защиты под локом
-                # обязательна, иначе резолюция перезапишет закрытую карточку.
-                if fm.status != KnowledgeStatus.HYPOTHESIS:
-                    raise ValueError(
-                        f"Карточка '{res.id}' больше не является рабочей гипотезой "
-                        f"(текущий статус: '{fm.status.value}'): конкурентная резолюция "
-                        "опередила этот батч."
-                    )
-                if fm.source == KnowledgeSource.USER_CONFIRMED:
-                    raise ForbiddenUserConfirmedActionError(
-                        f"Карточка '{res.id}' подтверждена пользователем (user_confirmed) "
-                        "и не может быть изменена или удалена через resolve_hypotheses."
-                    )
-                if res.action == "confirm":
-                    details.append(self._resolve_confirm(card_file, fm, sections, res, today_str))
-                elif res.action == "refute":
-                    details.append(self._resolve_refute(card_file, fm, sections, res, today_str))
-                elif res.action == "drop":
-                    details.append(self._resolve_drop(res))
-                elif res.action == "duplicate":
-                    details.append(self._resolve_duplicate(card_file, fm, sections, res, today_str))
-
-        # Синхронизация индекса
         sync_warning: str | None = None
-        try:
-            self.storage.sync()
-        except (sqlite3.OperationalError, StorageUnavailableError) as err:
-            logger.warning("Сбой синхронизации FTS5 индекса после резолюции гипотез: %s", err)
-            sync_warning = f"резолюции применены на диске, но обновление индекса отложено: {err}"
+        pass2_error: Exception | None = None
 
-        resp: dict[str, Any] = {
+        try:
+            for res, _card_file, _fm, _sections in validated:
+                try:
+                    details.append(self._apply_single_resolution(res, today_str))
+                except Exception as err:
+                    if len(details) > 0:
+                        logger.warning(
+                            "Сбой при обработке карточки '%s' в Pass 2 батча: %s. "
+                            "Частичное применение: %d карточек успешно применены.",
+                            res.id,
+                            err,
+                            len(details),
+                        )
+                        pass2_error = err
+                        break
+                    raise
+        finally:
+            # Синхронизация индекса обязательна ВСЕГДА, даже при сбое
+            try:
+                self.storage.sync()
+            except (sqlite3.OperationalError, StorageUnavailableError) as err:
+                logger.warning("Сбой синхронизации FTS5 индекса после резолюции гипотез: %s", err)
+                sync_warning = (
+                    f"резолюции применены на диске, но обновление индекса отложено: {err}"
+                )
+
+        if pass2_error is not None:
+            resp: dict[str, Any] = {
+                "status": "partial_failure",
+                "task_id": req.task_id,
+                "resolved_count": len(details),
+                "details": details,
+                "error": str(pass2_error),
+            }
+            if sync_warning:
+                resp["warning"] = sync_warning
+            return resp
+
+        resp = {
             "status": "resolved",
             "task_id": req.task_id,
             "resolved_count": len(details),

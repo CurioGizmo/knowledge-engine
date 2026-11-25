@@ -175,8 +175,9 @@ class ProjectServicePool(Generic[TBundle]):
             )
         canonical = root.resolve()
         if canonical not in scope:
+            bundle = self.acquire(root)
             scope[canonical] = None
-            return self.acquire(root)
+            return bundle
         return self.get(root)
 
     def release_scope(self) -> None:
